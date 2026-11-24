@@ -4,7 +4,7 @@ Who owns a value, what moves it, how it is lent, and what the compiler refuses: 
 A TypeScript developer has met none of this; a Rust developer will guess wrong, because Fish writes
 no `&`, copies strings, and makes copies Rust would make you ask for (section 19). Types are in
 `types.md`, tasks and `spawn` in `errors-async.md`, symptom-first fixes in `gotchas.md`. Checked
-against fishc 0.1.1.
+against fishc 0.1.3.
 
 ## 1. One owner: what is copied and what moves
 
@@ -528,30 +528,103 @@ Two `Rc`s that hold each other are never freed. Make the link back a `Weak` (`rc
 can't hold an `Rc` or a `Cell`; put an `Atomic` or a `Lock` inside instead. More: `examples/rc.fsh`,
 `examples/cell.fsh`, `examples/shared.fsh`, and `errors-async.md` for E03xx.
 
-## 18. Drop
+## 18. Drop, disposers and `using`
 
 A value is freed when its owner's scope ends, not at its last use; a temporary at the end of its
 statement; an old value when its variable is assigned again; a moved value by whoever it was moved
-to. There is no garbage collector and nothing to call. This release has no destructor hook, so the
-way to watch a drop is a `Weak`, which stops upgrading once the last `Rc` is gone.
+to. Locals go in reverse order of declaration. There is no garbage collector.
+
+A class's `[Symbol.dispose]()` method is its destructor, Rust's `Drop`: Fish runs it once, just
+before an instance is freed, on every way out of the scope, a panic included. TypeScript runs the
+method only for a value declared with `using`; Fish runs it for every owner, so `const` is enough.
 
 ```fsh
-function eat(_r: Rc<{ n: i64 }>) {}
+class Conn {
+  name: string;
+  constructor(name: string) { this.name = name; }
+  [Symbol.dispose](this: Mut<this>): void { console.log("closed", this.name); }
+}
+function send(c: Ref<Conn>) { console.log("sent on", c.name); }
+function finish(c: Conn) { console.log("finishing", c.name); }
 
 function main() {
-  let w = new Weak<{ n: i64 }>();
+  const a = new Conn("a");
+  let b = new Conn("b");
+  send(a);                  // expect: sent on a
+  b = new Conn("c");        // expect: closed b
+  finish(a);                // expect: finishing a
+                            // expect: closed a
+  const pool = [new Conn("p1"), new Conn("p2")];
+  console.log(pool.length); // expect: 2
+}
+// expect: closed p1
+// expect: closed p2
+// expect: closed c
+```
+
+The method takes no parameters, returns nothing, and can't be `async`, `static`, a generator,
+declare `throws` or take `this: Own<this>` (each E0710). Only a class's method counts: one in an
+object literal or an interface is E0801. A value with a disposer moves only as a whole, so closing
+it by hand, copying it and taking a field out of it are refused. To end it early, let its block
+end or move it into a function; pass `c.log.clone()`; declare `clone(): Conn` to say what a copy is.
+
+`using x = value;` adds one promise to that: the value never leaves its block. The binding can't
+be moved, returned, stored or assigned to (E0215), only lent, and its fields can still change. Its
+value must be an instance of a class with a disposer (E0411; `null` is refused too). It stands in
+a block of a function, never at top level or in a `for` head. Reach for it when a later edit
+moving the value away would be a bug, as with a lock guard, a span or a transaction; otherwise
+`const` disposes at the same place.
+
+```fsh
+class Conn {
+  name: string;
+  constructor(name: string) { this.name = name; }
+  [Symbol.dispose](this: Mut<this>): void { console.log("closed", this.name); }
+}
+function show(c: Ref<Conn>) { console.log("using", c.name); }
+
+function first(stop: boolean): i64 {
+  using a = new Conn("a");
+  using b = new Conn("b");
+  if (stop) return 1;
+  show(b);
+  return 2;
+}
+
+function main() {
+  console.log(first(true));
+  // expect: closed b
+  // expect: closed a
+  // expect: 1
   {
-    const r = new Rc({ n: 1 });
-    w = r.downgrade();
-    console.log(r.n, w.upgrade() !== null); // expect: 1 true
-  }
-  const kept = new Rc({ n: 2 });
-  const w2 = kept.downgrade();
-  eat(kept);
-  const temp = new Rc({ n: 3 }).downgrade();
-  console.log(w.upgrade() !== null, w2.upgrade() !== null, temp.upgrade() !== null); // expect: false false false
+    using c = new Conn("c");
+    c.name = "c2";
+    show(c);            // expect: using c2
+  }                     // expect: closed c2
+  console.log("end");   // expect: end
 }
 ```
+
+```fsh
+class Conn {
+  log: string[] = ["opened"];
+  [Symbol.dispose](this: Mut<this>): void { console.log("closed"); }
+}
+class Plain { n = 1; }
+function keep(_log: string[]) {}
+function take(_c: Conn) {}
+function byHand() { const c = new Conn(); c[Symbol.dispose](); }          // error: error[E0710]: a '[Symbol.dispose]' method runs when its value is dropped, so it can't be called by hand
+function apart() { const c = new Conn(); keep(c.log); }                    // error: error[E0214]: 'c.log' can't be moved out of 'c'
+function copied() { const c = new Conn(); const d = c.clone(); take(d); }  // error: error[E0213]: can't clone a 'Conn'
+function moved() { using c = new Conn(); take(c); }                        // error: error[E0215]: 'c' can't be moved: it is declared with 'using'
+function assigned() { using c = new Conn(); c = new Conn(); }              // error: error[E0215]: cannot assign to 'c': it is declared with 'using'
+function plain() { using p = new Plain(); console.log(p.n); }              // error: error[E0411]: 'p' can't be declared with 'using': its type 'Plain' has no disposer
+function main() {}
+```
+
+`await using` and `async [Symbol.asyncDispose]()` are in `errors-async.md`. To see where a file
+moves, lends and drops, run `fishc explain-borrows <file.fsh>` (`toolchain.md`). More:
+`examples/dispose.fsh`.
 
 ## 19. How this differs from Rust
 
@@ -586,15 +659,3 @@ function main() {
 
 When an E0201 note says to clone, first ask whether the function that took the value only reads
 it. If so, type its parameter `Ref<T>`: the error is gone without a copy. No hint suggests this.
-
-## Not released yet
-
-The compiler's source has these; fishc 0.1.1 refuses them (`error[E0801]: '[Symbol.dispose]'
-members are not supported yet`, and `using` is a syntax error).
-
-- A class's `[Symbol.dispose](this: Mut<this>): void` method is its drop: it runs when an instance
-  is freed, at the end of its scope in reverse order of declaration, on early return, on
-  reassignment, and for each element of a dropped array. It can't be async, throw, or be called.
-- `using r = open();` and `await using` declare a value disposed where its scope ends.
-- `fishc explain-borrows <file.fsh> [--fn <name>]` prints a file with a line under each place where
-  a value moves or is lent, and under each ownership error.

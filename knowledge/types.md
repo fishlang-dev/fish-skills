@@ -4,7 +4,7 @@ How Fish's type system differs from TypeScript's while keeping its syntax. Every
 in memory while compiling, so a type that TypeScript only checks, Fish also has to size: that is
 why there is no `any`, why an interface can't sit in a field, and why a union is a tagged value.
 Sized numbers, `Option` and value equality are in `language.md`; `Ref`, `Mut`, moves and `.clone()`
-in `ownership.md`; `throws` in `errors-async.md`; `@derive` in `meta.md`. Checked against fishc 0.1.1.
+in `ownership.md`; `throws` in `errors-async.md`; `@derive` in `meta.md`. Checked against fishc 0.1.3.
 
 ## 1. Object types are structural, classes are nominal
 

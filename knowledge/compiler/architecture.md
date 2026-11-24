@@ -5,7 +5,7 @@ file owns what. It is for someone about to change the compiler, and it is restat
 source under `src/`, which is the authority wherever this page and the code differ. Procedures
 (building, testing, adding a feature) are in `workflows.md`. What the language means is in
 `language.md`, `ownership.md` and `types.md`. This slice follows the compiler's main line of
-development after release 0.1.1, not the release.
+development and may be ahead of the release in `VERSION`.
 
 ## 1. The pipeline
 
@@ -29,9 +29,16 @@ order. Any stage before clang may throw a `CompileError`, which the CLI renders 
 
 `analysis.fsh` holds the front half as every compile and check starts it. `queries.fsh` is the
 door every check goes through, so a rebuild can reuse a kept one (section 16). `main.fsh` is the
-CLI and drives codegen and clang. `--timings` prints the stages as `parse`, `macros`, `check`,
-`moves`, `comptime`, `codegen`, `compile`, `runtime`, `link`; a stage timed inside another is
-taken out of the outer one, so `moves` is not counted in `check` twice.
+CLI and drives codegen and clang. `fishc build --timings` prints the stages as `parse`, `macros`,
+`check`, `moves`, `comptime`, `codegen`, `compile`, `runtime`, `link` (`fishc check` the first
+five); a stage timed inside another is taken out of the outer one, so `moves` is not counted in
+`check` twice. `fishc explain-borrows` and `fishc openapi` stop after the check and print from
+what it recorded (`explain.fsh`, `openapi.fsh`).
+
+**A plain build.** `fishc build` and `fishc run` set `session.plain`: nothing reads their check
+once the program is emitted, so the checker keeps less per instance and empties the tables of
+instances it will never compile (sections 5 and 9). `fishc check`, `fishc watch` and the
+language server keep everything.
 
 ## 2. Tokens and the lexer
 
@@ -61,8 +68,7 @@ Its context flags:
 - `inAllowed`: false only directly inside a `for` initializer, so `for (x in y)` is not read as
   an expression; `allowingIn` sets it for a nested parse and restores it
 - `inPipe` and `topicUsed`: set while parsing the right side of `|>`, and whether it used `%`
-- `docs`: whether JSDoc `@throws` tags count as a `throws` clause (true when compiling, false
-  when formatting or linting)
+- `docs`: whether JSDoc `@throws` tags count as a `throws` clause (when compiling, yes)
 
 `attempt(parse)` is speculative parsing: on a `CompileError` it puts `pos` and the flags back
 and returns `undefined`. Two rules that bite:
@@ -88,8 +94,7 @@ declared at the top of `parser.fsh`:
   `async`, `generator`, `macro`, an optional `throws` type and an optional `body` (absent for an
   overload signature or `declare function`).
 - `Expr`: every TypeScript expression plus `match`, `pipe`, `topic`, `comptime`, `unsafe` and
-  `tagged`. Assignments are expressions: `assign`, and `destructure` when the left side is a
-  pattern.
+  `tagged`. An assignment is an `assign`, or a `destructure` when its left side is a pattern.
 - `TypeNode`: the full TypeScript type grammar (`ref`, `literal`, `array`, `tuple`, `object`,
   `function`, `union`, `intersection`, `operator`, `indexed`, `query`, `import`, `conditional`,
   `infer`, `mapped`, `template`, `predicate`). Keyword types are `ref`s.
@@ -98,14 +103,12 @@ declared at the top of `parser.fsh`:
   `None` stays an `ident`: whether it binds or names a variant is the checker's call.
 - `Param`: `pattern`, `type`, `optional`, `rest`, `default`, `modifiers` (parameter
   properties), `decorators`, `comptime`. `this` is an identifier pattern named `this`.
-- `ClassNode`, shared by class declarations and expressions, with `ClassMember`s (`field`,
-  `method`, `constructor`, `get`, `set`, `index`, `staticBlock`) carrying `modifiers` and
-  `decorators`.
+- `ClassNode`, shared by class declarations and expressions; its `ClassMember`s (`field`,
+  `method`, `constructor`, `get`, `set`, `index`, `staticBlock`) carry modifiers and decorators.
 - `BinaryOp` is TypeScript's whole table; `ArithmeticOp` is the `+ - * / %` subset.
 
-Code branches on `kind` with `switch` or `if`. There are no visitor classes. `src/ast.fsh` is
-the same tree as Fish type declarations (`AstExpr`, `AstStmt`, `AstType`, `AstPattern`),
-generated from `parser.fsh`: it is what a macro sees, without the ids.
+Code branches on `kind` with `switch` or `if`; there are no visitor classes. `src/ast.fsh`,
+generated from `parser.fsh`, is the same tree as Fish types: what a macro sees, without ids.
 
 ## 5. Node ids, node tables, Rewrites and the generated walkers
 
@@ -113,21 +116,39 @@ Fish's `Map` and `Set` key on strings and integers, not objects, so every per-no
 the node's `id`. `Ids` (`{ last }`) is the counter; each compilation has its own, and `nextId`
 gives a fresh one. `nodes.fsh` holds the tables:
 
-- `NodeMap<K, V>` and `NodeSet<K>`: a map and a set of nodes by id
+- `NodeMap<K, V>` and `NodeSet<K>`: a map and a set of nodes by id. A `NodeMap` keeps each value
+  and each node under the one id: `set(node, value)` stores both, `setId(id, value)` the value
+  alone, with no copy of the node. `get`, `has` and `getById` find either; `keys`, `entries`
+  and iteration give only entries that hold a node, and `ids()` every id held.
 - `SiteTable<V>`: a value per expression id beside a `Site`, the few parts of the expression its
-  readers look at (id, span, kind, a name, a callee). An instance's `types`, `calls` and
-  `coercions` are `SiteTable`s, because keeping a copy of each expression held most of the
-  program many times over.
+  readers look at (id, span, kind, a name, an operator and its operands' ids, a callee). An
+  instance's `types`, `calls` and `coercions` are `SiteTable`s, because keeping a copy of each
+  expression held most of the program many times over. A table keeps `"all"` sites, `"read"`
+  (a site only for an equality comparison or `super`, the two kinds a plain build's passes
+  look at) or `"spans"` (only where each expression is written, read with `spanById`).
 - `TypeMap` and `TypeSet` (in `typing.fsh`) do the same for types.
+
+In a plain build a use of a local, a jump, a raise and a closure's environment are stored with
+`setId`, `types` keeps `"read"` sites and `coercions` keeps `"spans"`. A pass that runs in one
+therefore reads a table by id (`getById`, `ids()`), never by iterating its nodes or sites. A
+declaration keeps its node in every build, for the unused-binding warning.
 
 **Rewrites.** Lowering never changes a node's kind or children in place. It records a
 replacement in the compilation's `Rewrites` (`rewrites.replace(node, by)`), and the replacement
 takes the id of the node it replaces, so every table reads one entry for either. While a body is
-being checked, code reads a node through `rewrites.current(node)`. After the body's check, a
-rebuild puts each replacement into the tree (`startRebuild`, `rebuiltStmts`, `refresh` in
-`BodyChecker`), so the move check, comptime and codegen read a plain tree. A pass that lowers
-before checking keeps a `Rewrites` of its own and rebuilds before it returns. A statement list
-the checker edits is recorded by its body, its owner's id and its field.
+being checked, code reads a node through `rewrites.current(node)`. A pass that lowers before
+checking keeps a `Rewrites` of its own and rebuilds before it returns. A statement list the
+checker edits is recorded by its body, its owner's id and its field.
+
+Instances may share a body, and a body's tree is written once. The first check of the body to
+finish rebuilds it (`startRebuild`, `rebuiltStmts`, `refresh`, `endRebuild` in `BodyChecker`),
+putting every replacement made so far in place, so the move check, comptime and codegen read a
+plain tree. Nothing writes to that tree afterwards. A later check that reads or makes a newer
+replacement (`rewrites.sawLate()`) gets a copy of the body rebuilt as that check read it
+(`lowerApart`, kept by `Arenas.addLowered`, named by `Instance.lowered`), and is move-checked
+and compiled from the copy. The free function `bodyOf(arenas, instance)` in `arenas.fsh` gives
+the copy when there is one and the shared body otherwise: read an instance's body through it,
+not through `arenas.bodyOf(instance.body)`.
 
 **Generated walkers.** `walk.fsh` (children of each node, tagged, in field order) and
 `rebuild.fsh` (clone, id and rebuild helpers per node type) are generated from the AST types.
@@ -164,12 +185,13 @@ file's by a suffix (`helper-fsh2`), which `diag.fsh` strips again when a message
 1. `lowerOverloads`: each overload signature becomes a function that calls the implementation
 2. `hoistLocals`: a `type`, `interface`, `enum` or `class` written in a body becomes a top-level
    declaration under a name only its scope can write (`Point@0`)
-3. `lowerKeys`: computed property names known while compiling become field names
-4. `lowerDefaults`: `x: T = v` becomes an optional parameter and a first statement
-   `let x: T = <it> ?? v`
+3. `lowerKeys`: computed property names known while compiling become field names, and a class's
+   `[Symbol.iterator]`, `[Symbol.dispose]` and `[Symbol.asyncDispose]` methods take fixed names
+4. `lowerDefaults`: `x: T = v` becomes an optional parameter and a first `let x: T = <it> ?? v`
 5. `stdFor`: std's statements are put in front (section 14)
 
-Everything else that lowering does happens during the check, through `Rewrites`.
+`timersRunAsync` (a sync `main` setting timers runs as an async one) and `separatePrivateNames`
+run there too. Everything else lowering does happens during the check, through `Rewrites`.
 
 ## 8. A compilation and its arenas
 
@@ -177,20 +199,24 @@ Everything else that lowering does happens during the check, through `Rewrites`.
 top-level `let` and never mutates a top-level table.
 
 - `Session`: what outlives one compilation (a CLI run, a language server, a test): the lockfile
-  option, `timings`, whether cached checks may be read. `BuildSession` (`mathlib.fsh`) adds the
-  caches only building objects needs. `cachedSession()` in `stdcache.fsh` is what the CLI and
-  tests start from.
+  option, `timings`, whether cached checks may be read, `plain` (section 1), `borrows` (the
+  move check's log, when a run asks for one) and `failed` (codegen's failures, when a run
+  collects them). `BuildSession` (`mathlib.fsh`) adds the caches only building objects needs.
+  `cachedSession()` in `stdcache.fsh` is what the CLI and tests start from.
 - `Compilation`: one program's `ids`, `rewrites`, `names` (made-up names and how to show them),
   `typing`, `arenas`, `counts`, `files`, and its `session`.
 - `Tables`: what one check fills in and the later passes read. It carries the compilation's
-  parts plus program-wide node tables (`declarations`, `nestedFunctions`, `equalities`,
-  `disposers` and many more, each documented where it is declared).
+  parts plus program-wide tables keyed by node, by id or by type: `declarations` (the ids of
+  the nodes that declare a binding), `nestedFunctions`, `groupCalls` (each `taskGroup` call),
+  `routes` (each call adding a route to one of std's routers), `equalities` and `disposers`
+  (per class, the instance its `===` and its drop run) and many more, documented where declared.
 - `Arenas` (`arenas.fsh`): the compilation's `Instance`s, `Body`s, `Local`s and `ClassInfo`s.
   Each is named by its place from 1, as a branded id: `InstanceId`, `BodyId`, `LocalId`,
   `ClassId`. Read them with `instanceOf`, `bodyOf`, `localOf`, `classOf`, change them through
   `instanceMut`, `bodyMut`, `localMut`, `classMut`, and lend one beside the arena with
-  `swapInstance` and `swapBody`. These records refer to each other only by id, never by holding
-  one another, which a test enforces.
+  `swapInstance` and `swapBody`. The bodies instances lowered apart (section 5) are a second
+  list with its own `addLowered`, `loweredOf`, `loweredMut`, `swapLowered` and `dropLowered`.
+  These records refer to each other only by id, never by holding one another (a test's rule).
 
 ## 9. Body, Instance and Checked
 
@@ -204,7 +230,7 @@ the arena, apart from its node `id`.
 An `Instance` (`check.fsh`) is a body checked with concrete types, and is one compiled function:
 
 - `id`, `body` (a `BodyId`), `symbol`, `bindings` (type parameter name to type), `concrete`,
-  `depth`, `returns`, `throws`
+  `depth`, `returns`, `throws`, and `lowered` when it has a copy of the body of its own
 - `types: SiteTable<Type>`: every value expression's type
 - `locals: NodeMap<Expr | Stmt | Param | ObjectProp, LocalId>`: the binding each name use,
   declaration, parameter and shorthand property refers to, after shadowing
@@ -217,9 +243,15 @@ An `Instance` (`check.fsh`) is a body checked with concrete types, and is one co
 - also `borrowsFrom`, `raises` and `caught` (error flow), `consumes` (places handed over, set
   by the move check), `patterns` (what each `match` pattern tests) and `copiesOut`
 
-A `Local` is `{ name, type, mutable, param, id, localId }`: `id` is unique within one check and
-names the IR slot, `localId` is its arena id. `Checked` is `{ instances: InstanceId[], tables,
-warnings }`, and `compiledOf(checked)` in `codegen.fsh` gives the instances as records.
+`emptyTables(plain)` makes a new instance's tables (section 5 says what a plain build keeps in
+them). A plain build also empties them early: as a check ends, `Checker.shed` replaces the
+tables of an instance that is not concrete and not a closure, and of the closures checked
+inside it, with empty ones, and drops any body it lowered apart.
+
+A `Local` is `{ name, type, mutable, param, id, localId }` (and `using`, for a `using`
+binding): `id` is unique within one check and names the IR slot, `localId` is its arena id.
+`Checked` is `{ instances: InstanceId[], tables, warnings }`; `compiledOf(checked)` in
+`codegen.fsh` gives the instances as records.
 
 ## 10. The type model
 
@@ -265,8 +297,12 @@ the instance for exactly those bindings. Only concrete instances are compiled.
   `function show(x: Shape)` is instantiated per concrete argument type.
 - A concrete instance's symbol is its name plus `#` and a hash of its type arguments
   (`first#rv34vv`), so it is the same in every program and build order.
-- `depth` counts the instantiations that led to an instance. Past 64 the checker reports a
-  generic that instantiates without end.
+- A call inside a generic definition makes an instance of its callee with placeholder types.
+  The checker's queue passes over such an instance (`Checker.onlyAsked`: not concrete, not its
+  body's definition, no `comptime` parameter). It is checked only when a caller asks for what
+  its body alone tells (an inferred return type, whether a method keeps what it is lent), so
+  an instance in the arena may have empty tables, having never been checked.
+- `depth` counts the instantiations behind an instance; past 64 it is reported as endless.
 - A generic class is declared again for each set of type arguments (`templates` on the
   `Checker`, `GenericClasses`), giving a class named with them (`Box<i64>`).
 
@@ -278,17 +314,27 @@ the instance for exactly those bindings. Only concrete instances are compiled.
   each class to its base, lays it out and checks `override` and `implements`. `extends` embeds
   the base as the first field and delegates to it. A method borrows `this` read-only unless it
   declares `this: Mut<this>`, or takes it with `this: Own<this>`.
-- **Unions** (`unions.fsh`, `layout.fsh`): a `UnionRecord` lists its members. At run time a
-  union is a tag (the member's index) and enough 64-bit words for its largest member. `Option`
-  is a union with `null`.
+- **Disposers** (`classes.fsh`, `check.fsh`, `moves.fsh`, `codegen.fsh`): a class's
+  `[Symbol.dispose]` method is its disposer, recorded per class in `Tables.disposers`, and the
+  class is then `disposable` (`ClassRecord.disposes`, its own or a base's). Its instances only
+  move: a field moved out of one is `E0214`, a `using` binding moved, assigned to or held by a
+  closure is `E0215`, and comptime refuses to make one. `markLive` gives the first class of a
+  chain to declare one the hidden field `LIVE`, which `new` sets once the constructor has
+  returned; the drop clears it and runs the disposers, the class's own first, then each
+  base's. The checker lowers `await using`: each way out of the scope first awaits the
+  binding's `[Symbol.asyncDispose]` method.
+- **Task groups** (`values.fsh`, `typing.fsh`): `taskGroup(async (group) => ...)` is a call the
+  checker knows, not a std function. `typing.groupFuture` makes its future, the closure is
+  handed a `TaskGroup` block, and codegen calls the runtime's `fsh_rt_group_*` functions.
+- **Unions** (`unions.fsh`, `layout.fsh`): a `UnionRecord` lists its members. At run time it is
+  a tag (the member's index) and 64-bit words for its largest member. `Option` is one with `null`.
 - **Enums** (`enums.fsh`): a C-like enum is the union of its members, each a literal that knows
   its enum. One with computed members is `pending` until first read. A data-carrying enum is a
   union of `variant` types, made once per set of type arguments.
 - **Narrowing** (`narrow.fsh`): `Facts` is a `Map<string, Type>` from a binding's id, or a field
   path such as `3.next.value`, to the narrower type a condition proved. `typeof`, literal and
   discriminant comparisons and `instanceof` narrow through `if`, early exits, `&&`, `||`, `?:`,
-  `while` and `switch`. A narrowed read gives the narrower type, which codegen takes out of the
-  union.
+  `while` and `switch`. A narrowed read gives the narrower type, taken out of the union.
 - **Match** (`match.fsh`): each pattern gets a `PatternInfo` in the instance's `patterns`
   (`any`, `literal`, `variant`, `some`, `none`, `or`) with the type of the value it meets, and
   the same module computes which values no arm covers.
@@ -318,14 +364,11 @@ on its own and errors are collected, so one build reports several.
 
 The reason is ownership: a module owned as a field would run its methods on the field while the
 host is lent to them, which Fish refuses. `tests/unit/modules.fsh` parses the checker's files
-and guards the convention:
-
-- no top-level function returns an object of its own inner functions
-- no code destructures a method out of a module's instance
-- no class holds, as a field, a module that calls back into its host
-- no module that calls back into its host keeps state of its own
-- the checker's files import only the modules meant to be checked with them
-- every fallible function, method and constructor declares what it throws
+and guards the convention: no top-level function returns an object of its own inner functions,
+no code destructures a method out of a module's instance, no class holds as a field a module
+that calls back into its host, no such module keeps state of its own, the checker's files
+import only the modules meant to be checked with them, and every fallible function, method
+and constructor declares what it throws.
 
 ## 14. Moves, comptime and std
 
@@ -337,8 +380,7 @@ is a local's id or `this` followed by a field path, like `3.inner.x`. It reads t
 `types`, `locals`, `calls` and `borrowsFrom`, and returns the closure `captures`, the `consumes`
 set codegen needs to know which places are handed over rather than copied, and `keeps`. Errors
 are `CompileError`s in the `E02xx` range, most with a `note` pointing at the move or the loan.
-With `session.borrows` set it also logs every move and loan, which `fishc explain-borrows`
-prints.
+With `session.borrows` set it also logs every move and loan, for `fishc explain-borrows`.
 
 **Comptime** (`comptime.fsh`). An `Interpreter` runs the checked program directly: it evaluates
 `Expr` and `Stmt` nodes using an instance's tables, over `Value`s (`record`, `array`, `variant`
@@ -349,12 +391,14 @@ expansion (`comptimeCall`), and from codegen, which bakes `comptime expr` values
 `comptime { }` blocks and computes top-level consts into globals.
 
 **Std** (`std.fsh`). Fish's std library is Fish source held in template strings inside the
-compiler. `STD_SOURCE` joins sections (`PRELUDE`, `HTTP`, `FETCH`, `BYTES`, `DATE`, `STREAMS`
-and others). `stdFor` parses it for each compilation, always keeps the prelude, and adds a
-section only when the program names something it declares, then renames helpers to names no
-program can write and moves the spans past `STD_BASE`. `STD_MODULES` maps a module name (`fs`,
-`path`, `os`, `child_process`, `sqlite`, `fish:tar`, `Bun`) to its source, loaded as a file when
-imported; `stdModule` resolves `node:fs` and `fs` to the same entry. The session can hold a
+compiler. `STD_SOURCE` joins sections (`PRELUDE`, `HTTP`, `TRACE`, `FETCH`, `BYTES`, `DATE`,
+`STREAMS` and others). `stdFor` parses it for each compilation, always keeps the prelude, and
+adds a section only when the program names something it declares, then renames helpers to
+names no program can write and moves the spans past `STD_BASE`. `TRACE` (the spans `serve`
+records and their OTLP export) comes with `HTTP`. `STD_MODULES` maps a module name (`fs`,
+`path`, `os`, `child_process`, `sqlite`, `fish:tar`, `fish:zip`, `fish:trace`, `Bun`) to its
+source, loaded as a file when imported. `stdModule` resolves `node:fs` and `fs` to the same
+entry, `bun` to `Bun`, and a `fish:` module only by its full name. The session can hold a
 parsed std tree, but `cachedSession()` does not fill it, so each compilation parses std.
 
 ## 15. Codegen and the runtime
@@ -376,7 +420,7 @@ function main() {
 ```
 
 `fishc build --emit-llvm` prints the module. For `add` in a dev build it holds these lines,
-among others:
+among others (a string constant's name is a digest of its text, so it differs by file name):
 
 ```text
 define internal i64 @"fsh.add"(i64 %"a.arg", i64 %"b.arg") uwtable personality ptr @__gcc_personality_v0 {
@@ -386,7 +430,7 @@ entry:
   %sum.2 = alloca i64
   store i64 %"a.arg", ptr %a.0
   %t2 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t0, i64 %t1)
-  call void @fsh_rt_panic(ptr @.str.2fya2nt3hzean)
+  call void @fsh_rt_panic(ptr @.str.b4e4z7sj4184)
   store i64 %t3, ptr %sum.2
 ```
 
@@ -420,16 +464,20 @@ entry:
   `fsh_rt_print_begin` and `fsh_rt_print_end`, with string literals folded into the format.
 - **Async and generators.** A `future` or `generator` type has a `frame` of fields. The body is
   lowered to a poll (or resume) function over that frame, and the runtime's executor polls it.
+- **The module's text** is held once: each function's lines are joined into one string as it
+  is emitted (`pack`), the named struct definitions are read from those pieces, and the whole
+  is joined a single time. A build carrying an earlier build's functions over keeps its lines.
 
 **The runtime.** `runtime.fsh` holds `RUNTIME`, the IR declarations of what compiled code calls
 (`printf`, the `fsh_rt_*` functions). `native.fsh` holds the C half as text: `NATIVE` (the
-allocator that counts live blocks, strings, arrays, maps, tasks, the reactor, files, sockets)
-plus `TLS_NATIVE`, `ZLIB_NATIVE` and `SQLITE_NATIVE`, each compiled and linked only when the
-program's IR calls into it. A string is a block: a reference count, a byte length, a pointer to
-its bytes, the block it shares them with when it is a slice, its UTF-16 length once known, then
-its bytes; a count below zero marks a literal. `mathlib.fsh` builds the correctly rounded `Math`
-functions from `src/runtime/math.cpp` and `vendor/`. `js_native.fsh` is the glue to the vendored
-JS engine, linked only into programs that use npm packages.
+allocator that counts live blocks, strings, arrays, maps, tasks and task groups, the reactor,
+files, sockets, the trace context) plus `TLS_NATIVE`, `ZLIB_NATIVE` and `SQLITE_NATIVE`, each
+of those three compiled and linked only when the program's IR calls into it (`callsTls`,
+`callsZlib`, `callsSqlite` in `main.fsh`). A string is a block: a reference count, a byte
+length, a pointer to its bytes, the block it shares them with when it is a slice, its UTF-16
+length once known, then its bytes; a count below zero marks a literal. `mathlib.fsh` builds the
+correctly rounded `Math` functions from `src/runtime/math.cpp` and `vendor/`. `js_native.fsh`
+is the glue to the vendored JS engine, linked only into programs that use npm packages.
 
 ## 16. Incremental builds and caches
 
@@ -445,10 +493,13 @@ JS engine, linked only into programs that use npm packages.
 - **The language server** (`lsp.fsh`, `navigate.fsh`) holds one `Queries` per program and checks
   with `editing` set: tests are lifted in and the entry needs no `main`.
 - **Objects.** A dev build's IR is split by `split.fsh` into std's part, a part per source
-  file and the program's part. Each is compiled to an object cached under the cache directory
-  (`FISH_CACHE_DIR`, else `~/.cache/fish`) by a hash of clang, target, flags and text, as the
-  runtime's C and the `Math` objects are. A release build is one module, so `-O2` inlines
-  across std and the program.
+  file and the program's part (`parts` in `main.fsh`). Each is compiled to an object cached
+  under the cache directory (`FISH_CACHE_DIR`, else `~/.cache/fish`) by a hash of clang,
+  target, flags and text, as the runtime's C and the `Math` objects are. A release build is
+  one module, so `-O2` inlines across std and the program, until its IR reaches
+  `RELEASE_MODULE_LENGTH` (64 MiB): past that it is split the same way and each part is
+  compiled at `-O2` on its own, so clang holds one file's code at a time (the compiler's own
+  release build is over the limit).
 - **The check cache** (`checkcache.fsh`). A check's key covers the compiler binary, the entry,
   the flags and every file read. Today only an envelope is written under `checks/` in the cache
   directory: `--timings` notes a hit and the check still runs. `--no-check-cache` turns it off.
@@ -477,6 +528,7 @@ m.fsh:4:8: note: 'a' moved here: passing it to 'keep' hands it over, as if 'keep
   then `error: could not compile due to N previous errors`.
 - `sources` and `names` are attached where the error leaves the compilation (`sourced`,
   `named`), so the renderer finds the file an offset is in and shows made-up names as written.
+  `borrows` carries the move check's log out of a failed check, for `fishc explain-borrows`.
 - Warnings (`warnings.fsh`) are `CompileError`s in `Checked.warnings`, rendered with kind
   `warning`. Any other exception (a clang failure, an `assert`) is an internal error.
 
@@ -485,7 +537,7 @@ m.fsh:4:8: note: 'a' moved here: passing it to 'keep' hands it over, as if 'keep
 Every file in `src/`. Generated files are marked.
 
 - `analysis.fsh`: load, expand macros, link and check, as every compile starts; `analyze`
-- `arenas.fsh`: the arenas of instances, bodies, locals and classes, and their ids
+- `arenas.fsh`: the arenas of instances, bodies, bodies lowered apart, locals and classes
 - `arithmetic.fsh`: lowering of integer operators with their overflow and division panics
 - `ast.fsh`: generated; the `Ast` type declarations macros see
 - `astgen.fsh`: the generator of `ast.fsh`
@@ -508,7 +560,7 @@ Every file in `src/`. Generated files are marked.
 - `doc.fsh`: the formatter's document model and line breaking
 - `edits.fsh`: what an edit to a file changed: which bodies, which signatures
 - `enums.fsh`: C-like and data-carrying enum declarations
-- `explain.fsh`: `fishc explain-borrows` output
+- `explain.fsh`: `fishc explain-borrows`: a file printed with its moves, loans and errors
 - `expressions.fsh`: the expression grammar
 - `flow.fsh`: whether control reaches the end of a body; which names a body assigns
 - `fmt.fsh`: the `fishc fmt` command: files, `--check`, stdin
@@ -519,7 +571,7 @@ Every file in `src/`. Generated files are marked.
 - `interfaces.fsh`: satisfying an interface by shape
 - `js.fsh`: a `.d.ts` declaration turned into Fish declarations
 - `js_native.fsh`: C glue between Fish and the vendored JS engine
-- `keys.fsh`: computed property names known while compiling
+- `keys.fsh`: computed property names known while compiling; `Symbol`-keyed methods' names
 - `layout.fsh`: LLVM types, named structs, conversions between representations
 - `lexer.fsh`: `Token`, `Lexer`
 - `locals.fsh`: local type, interface, enum and class declarations hoisted
@@ -536,7 +588,7 @@ Every file in `src/`. Generated files are marked.
 - `native.fsh`: the C half of the runtime, as text
 - `navigate.fsh`: what the language server reads from a check
 - `nodes.fsh`: node tables, `Rewrites`, `SiteTable`, walking, renumbering
-- `openapi.fsh`: the OpenAPI document of a program's routes
+- `openapi.fsh`: `fishc openapi`: the OpenAPI 3.1 document of a checked program's routes
 - `operators.fsh`: which operators have a meaning and their types
 - `overloads.fsh`: overload signatures lowered to functions
 - `parseargs.fsh`: the lowering of std's `parseArgs` config literal
@@ -558,7 +610,7 @@ Every file in `src/`. Generated files are marked.
 - `rustshim.fsh`: the generated cargo shim crate for Rust functions
 - `semver.fsh`: versions and npm ranges
 - `sizes.fsh`: a type's size and alignment
-- `split.fsh`: a dev build's IR split into cacheable parts
+- `split.fsh`: a dev build's IR, or a large release build's, split into cacheable parts
 - `std.fsh`: std as Fish source; `stdFor`, `STD_MODULES`
 - `stdcache.fsh`: `cachedSession()`
 - `suggest.fsh`: near-miss names for "cannot find" errors
@@ -590,7 +642,7 @@ Every file in `src/`. Generated files are marked.
   where it is found. Messages are lowercase, quote source names in single quotes, and say what
   to do where they can. Fallible functions declare `throws` or a JSDoc `@throws`.
 - **Naming.** camelCase functions and variables, PascalCase types, lowercase file names.
-  Imports name the `.fsh` extension, and only std modules are imported, by their `node:` names.
+  Imports name the `.fsh` extension; only std modules are imported, most as `node:<name>`.
 - **Comments say why**, or state what a declaration is in a line or two. None restate the code.
 - **Generated files** (`walk.fsh`, `rebuild.fsh`, `unquote.fsh`, `ast.fsh`, `casemap.fsh`) are
   changed by changing their generator and running it. A unit test fails when one is stale.

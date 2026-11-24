@@ -4,7 +4,7 @@ The values and everyday syntax that go wrong when Fish is written as if it were 
 program shape, numbers, conditions, equality, absence, strings, bindings, collections, functions,
 classes in brief, enums, `match`, pipes and generators. Moves and borrows are in `ownership.md`,
 the type system in `types.md`, `throws` and `async` in `errors-async.md`, the std library in
-`std.md`, and porting a TypeScript file step by step in `porting.md`. Checked against fishc 0.1.1.
+`std.md`, and porting a TypeScript file step by step in `porting.md`. Checked against fishc 0.1.3.
 
 In the blocks that show refusals, the compiler reports one error per function, so each function
 holds one refused line with its message beside it.
@@ -309,6 +309,11 @@ fails most often, since TypeScript declares nearly every array and object `const
 needs a type the compiler can see where it is declared. An unused binding is warning W0001; name
 it `_x` when that is on purpose.
 
+A third keyword, `using x = value;`, binds a value whose class has a `[Symbol.dispose]()` method
+and keeps it in its block: the binding can't be reassigned or moved, only lent, and the method
+runs where the block ends. `await using` is its async form. Both are in `ownership.md`, section
+18, and `errors-async.md`, section 18.
+
 ```fsh
 class Counter { n = 0; bump(this: Mut<this>) { this.n += 1 } }
 function a() { const xs = [1, 2]; xs.push(3) }               // error: error[E0207]: cannot push to 'xs' because it is a constant
@@ -583,10 +588,3 @@ no Fish spelling at all: `eval` and `new Function`, prototype edits and `Object.
 merging (`porting.md`). Left out the same way, under the codes of their own areas: truthiness
 (E0102, section 4), `any` (E0105, section 10), a top-level `let` (E0404, section 2), and identity
 comparison (section 5).
-
-## Not released yet
-
-The compiler's source has `using` declarations, which fishc 0.1.1 refuses as a syntax error
-(E0001). A `using` binding holds a value whose class declares `[Symbol.dispose]()`, and the
-method runs where the binding's scope ends, later bindings first. The binding can't be reassigned
-or moved, only lent.

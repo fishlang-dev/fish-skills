@@ -5,7 +5,7 @@ consts, tagged templates, `macro function`s applied as decorators, and `@derive`
 none of it, and Rust's `const fn`, `macro_rules!` and `#[derive]` are only loose guides. Type
 operators are in `types.md`, `throws` in `errors-async.md`, `fishc test` in `toolchain.md`. Three
 complete programs to adapt: the comptime lookup table in section 3, the declaration macro in
-section 9, the derived JSON round trip in section 17. Checked against fishc 0.1.1.
+section 9, the derived JSON round trip in section 17. Checked against fishc 0.1.3.
 
 ## 1. What runs while compiling, and which command runs it
 
@@ -104,7 +104,7 @@ function main() {
 
 ## 4. What comptime code may do
 
-Comptime code is ordinary Fish, interpreted. It is pure computation, and in 0.1.1 the interpreter
+Comptime code is ordinary Fish, interpreted. It is pure computation, and in 0.1.3 the interpreter
 covers much less of std than the runtime does. Macro bodies run under the same rules.
 
 | Works | Refused by design | Not yet: `... isn't supported in comptime code yet` |
@@ -123,7 +123,7 @@ a loop that never ends?`, `this comptime code nests calls more than 1000 deep; i
 recursion that never ends?`, `this comptime code panicked: attempt to add with overflow`, `this
 comptime code threw an error it didn't catch: IoError: no such table`.
 
-**Symptom**: a comptime string comes out unchanged. **Why**: in 0.1.1 `s.replace(/o/g, "0")` under
+**Symptom**: a comptime string comes out unchanged. **Why**: in 0.1.3 `s.replace(/o/g, "0")` under
 comptime returns `s` as it was, with no error, while the same call at run time replaces.
 **Fix**: keep regexes out of comptime code. More: `examples/comptime.fsh`.
 
@@ -484,7 +484,7 @@ function main() {
 - Every field must itself compare: a `Map`, `Set` or function field is E0112 at the `@derive`
   (`a Map isn't compared by value`), and a derived class's base needs `equals` too. Floats compare
   as floats: an instance holding `NaN` is unequal to itself.
-- Not unlocked by it in 0.1.1: `xs.includes(p)` on an array of instances (E0112, use `some`), and
+- Not unlocked by it in 0.1.3: `xs.includes(p)` on an array of instances (E0112, use `some`), and
   instances as `Map` keys (E0116).
 - `@derive(Hash)` is `error[E1104]: 'derive' knows 'Eq' and 'Json' so far; 'Hash' isn't one it
   can derive yet`; on a function, alias or interface, `'derive' applies to a class or an enum`.

@@ -17,7 +17,8 @@ You find the cause before you change anything. Pack: `${CLAUDE_PLUGIN_ROOT}/know
    errors are often consequences of the first: fix one, check again.
 3. **Look it up.** Grep `gotchas.md` for the message text, read the code's entry in `errors.md`
    (or `fishc explain <code>`), then the slice for the area:
-   - E02xx: `ownership.md`. Say in one sentence who owns the value and who wanted it.
+   - E02xx: `ownership.md`. Run `fishc explain-borrows <file> --fn <name>` to see every move and
+     loan in the function, then say in one sentence who owns the value and who wanted it.
    - E01xx, E05xx, E07xx: `types.md`.
    - E03xx, E06xx: `errors-async.md`.
    - E0801 / E0802: the form is not supported, or left out; `gotchas.md` lists the workaround.

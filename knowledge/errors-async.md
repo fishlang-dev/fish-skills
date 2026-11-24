@@ -3,7 +3,7 @@
 How a Fish function fails and how Fish code runs concurrently: `throws` clauses, `try`/`catch`,
 panics, then `async`/`await`, tasks, the types tasks share, and cancellation. `Option` and
 narrowing are in `types.md`, moves and borrows in `ownership.md`, the HTTP server, `fetch` and
-files in `std.md`. Checked against fishc 0.1.1.
+files in `std.md`. Checked against fishc 0.1.3.
 
 Three habits to drop first. From TypeScript: a function's errors are part of its type, and an
 async call does nothing until it is awaited. From Rust: there is no `?` and no `Result`; a call
@@ -247,7 +247,7 @@ async function main() {
   completion, after which it is gone`). One kept in a variable and never awaited never runs, and
   only the unused-variable warning says so.
 - An async function's written return type is `Promise<T>` (E0305 otherwise); unwritten, it is
-  inferred. An async arrow's return type can't be written at all in this release: leave it off.
+  inferred. An async arrow takes the same annotation, `async (n: i64): Promise<i64> => n + 1`.
 - `await` outside an async function is E0301, `await` of a non-Promise E0305, and an async
   function awaiting a call of itself E0113 (loop instead).
 - An awaited call may borrow: `await first(names)` with a `Ref` parameter is fine, since the
@@ -581,18 +581,120 @@ callback giving a Promise isn't supported yet; await each value in a 'for...of' 
 **Fix**: a `for...of` loop that awaits, or push calls into a `Promise<T>[]` as above.
 More: `examples/async_generator.fsh`.
 
-## Not released yet
+## 17. Task groups
 
-The compiler's source has these; fishc 0.1.1 refuses them (`unknown function 'taskGroup'`, a
-syntax error at `using`, `'[Symbol.dispose]' members are not supported yet`).
+`await taskGroup(async (group) => { ... })` is structured concurrency: `group.spawn(call)` starts
+a child task, and the `await` returns only when the arrow and every child have finished, giving
+what the arrow returns. Nothing a group starts outlives it, so there are no handles to collect
+and no detached tasks. It is a built-in, not in `std-api.md`. Use it where TypeScript writes
+`Promise.all` over tasks that should stop together; children still obey the rules of section 12,
+so each is passed clones and collects into a `shared`, an `Atomic` or a `Channel`.
 
-- **Task groups.** `await taskGroup(async (group) => { ... })` runs an async arrow written in
-  place. `group.spawn(call)` starts a child task, and the `await` returns only when the arrow and
-  every child have finished, giving what the arrow returns. If the arrow or a child throws,
-  `group.signal` aborts so the others can stop, and the error leaves the `await`; a child's
-  panic is re-raised there too. Children still obey the Send rule.
-- **Disposal.** A class method `[Symbol.dispose](this: Mut<this>): void` runs when an instance is
-  dropped; it takes no parameters and can't throw, be async or be called by hand.
-- **`using`.** `using r = new Res();` disposes the value at the end of its scope, in reverse
-  order of declaration. `await using r = ...;` awaits the class's `async
-  [Symbol.asyncDispose](this: Mut<this>): Promise<void>` there instead, in async functions only.
+```fsh
+async function size(text: string, ms: i64, total: shared<{ n: Atomic<i64> }>) {
+  await sleep(ms);
+  total.n.add(text.length as i64);
+  console.log("counted", text); // expect: counted quick
+}                               // expect: counted slow
+async function main() {
+  const total = shared({ n: new Atomic(0) });
+  const mine = total.clone();
+  const label = await taskGroup(async (group) => {
+    group.spawn(size("slow", 60, mine.clone()));
+    group.spawn(size("quick", 5, mine.clone()));
+    return "sizes";
+  });
+  console.log(label, total.n.load()); // expect: sizes 9
+}
+```
+
+When the arrow or a child throws, `group.signal` aborts, the group waits for the others to stop,
+and the first error leaves the `await`: the group throws what its arrow throws and what its
+children throw, with no handle to await. A child sees the abort only if it was given the signal.
+A child's panic is re-raised at the `await` (`a task this awaited panicked: <reason>`). Dropping
+the group's Promise, as the loser of a `Promise.race`, aborts the signal too.
+
+```fsh
+class NotFound { path: string; constructor(path: string) { this.path = path; } }
+async function find(path: string): Promise<void> throws NotFound {
+  await sleep(20);
+  throw new NotFound(path);
+}
+async function slow(signal: AbortSignal) {
+  try { await sleep(60000, signal); } catch (e) { console.log("sibling stopped"); }
+}
+async function main() {
+  try {
+    await taskGroup(async (group) => { group.spawn(slow(group.signal)); group.spawn(find("users/7")); });
+  } catch (e) {
+    console.log("caught", e.path);
+  }
+  // expect: sibling stopped
+  // expect: caught users/7
+}
+```
+
+The call is awaited where it is written and takes an async arrow written in place. A child that
+can throw is spawned in the arrow's own body (a loop or a branch there is fine), not inside a
+nested closure such as `forEach`, and not through a group passed to another function (E0306). A
+`try` around `group.spawn(...)` catches nothing, since the error surfaces at the group's `await`
+(E0603). More: `examples/taskgroup.fsh`.
+
+```fsh
+class Oops { why: string; constructor(why: string) { this.why = why; } }
+async function fails(n: i64): Promise<void> throws Oops { await yieldNow(); throw new Oops("failed " + n); }
+async function nested() throws Oops { await taskGroup(async (group) => { [1, 2].forEach((n) => group.spawn(fails(n))); }); } // error: error[E0306]
+async function named() { const pending = taskGroup(async (group) => { await yieldNow(); }); await pending; } // error: 'taskGroup' is awaited where it is called
+async function main() {}
+```
+
+## 18. `await using`
+
+A class's `[Symbol.dispose]()` runs when an instance is dropped, and `using` pins a value to its
+block (`ownership.md`, section 18). A drop can't wait, so cleanup that must `await` (a flush, a
+rollback, a goodbye message) goes in `async [Symbol.asyncDispose](this: Mut<this>):
+Promise<void>`, which only `await using x = value;` runs: it awaits the method on each ordinary
+way out of the block, an early `return`, a `break` and a throw included. The method may declare
+`throws`; the enclosing function then throws that too.
+
+```fsh
+class Conn {
+  name: string;
+  constructor(name: string) { this.name = name; }
+  async [Symbol.asyncDispose](this: Mut<this>): Promise<void> {
+    await sleep(1);
+    console.log("flushed", this.name);
+  }
+}
+async function work(stop: boolean): Promise<i64> {
+  await using c = new Conn("db");
+  if (stop) return 1;
+  console.log("working on", c.name);
+  return 2;
+}
+async function main() {
+  const n = await work(true);
+  // expect: flushed db
+  console.log(n); // expect: 1
+}
+```
+
+- Declared with `const`, such a value is never flushed: nothing but `await using` calls the
+  method, and calling it by hand is E0710.
+- A panic, or the Promise being dropped mid-way, awaits nothing. A class whose release must not
+  be skipped declares both methods: `[Symbol.dispose]()` then runs alone on those two paths, and
+  the async one stands in for it on the ordinary ones.
+- `await using` needs an async function that is not a generator, and a class with the async
+  method; a class with only `[Symbol.dispose]()` takes plain `using` (E0411 either way). It can't
+  stand in a `match` arm, a `try` with a `finally`, or straight in a `switch` case, and a
+  `return`, `break` or `continue` inside a `try` with a `finally` can't leave its block (E0412):
+  keep the result in a variable and return after the `try`.
+
+```fsh
+class Sync { [Symbol.dispose](this: Mut<this>): void {} }
+class Conn { async [Symbol.asyncDispose](this: Mut<this>): Promise<void> {} }
+function notAsync() { await using c = new Conn(); }         // error: error[E0411]
+async function wrongKind() { await using s = new Sync(); }  // error: error[E0411]
+async function inTry(): Promise<i64> { await using c = new Conn(); try { return 1; } finally { console.log("done"); } } // error: error[E0412]
+async function main() {}
+```

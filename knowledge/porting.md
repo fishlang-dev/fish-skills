@@ -4,7 +4,7 @@ Turning a TypeScript file or project into Fish that compiles and behaves the sam
 `fishc lint`, the `fishc check` loop, the rule tables behind them, and a before and after for each
 common rewrite (`ts` blocks are the unchecked originals; every `fsh` block is checked). What
 the Fish side means is in `language.md`, `ownership.md`, `types.md` and `errors-async.md`; keeping
-a part in JavaScript is in `interop.md`. Checked against fishc 0.1.1.
+a part in JavaScript is in `interop.md`. Checked against fishc 0.1.3.
 
 ## 1. The procedure
 
@@ -87,7 +87,7 @@ dependencies (3, 1 dev)
 ## 3. The survey's rules
 
 `reject` (weight 10): no Fish equivalent, so the code is redesigned. `guided` (weight 3): a person
-chooses the rewrite; the lint reports `G1` to `G11`, never editing them, and only the survey counts
+chooses the rewrite; the lint reports `G1` to `G12`, never editing them, and only the survey counts
 the rest. `auto` (weight 0): `fishc lint --fix` rewrites it. `unsupported` (weight 0, printed as
 `waiting on Fish`): not compiled yet, often `error[E0801]` with a message ending `not supported yet`.
 
@@ -97,7 +97,7 @@ the rest. `auto` (weight 0): `fishc lint --fix` rewrites it. `unsupported` (weig
 | `R2` | reject | prototype edits and Object.defineProperty: Fish types have fixed layouts | prototype edits and Object.defineProperty change a type after it is declared, and Fish types have fixed layouts; declare the field or method on the class, or wrap the value |
 | `R3` | reject | delete on an object not declared as a dictionary: Fish objects have fixed layouts; use an Option field, a dictionary type or a Map | delete removes a field, and Fish objects have fixed layouts; make the field an Option and set it to null, or keep the entries in a dictionary, '{ [k: string]: T }', or a Map |
 | `R5` | reject | the arguments object: use rest parameters | the arguments object isn't in Fish; take the arguments as a rest parameter, as in '...args: T[]' |
-| `R6` | reject | Symbol: Fish has no runtime reflection | Symbol is runtime reflection, which Fish doesn't have beyond a '[Symbol.iterator]' method; use a string or an enum for a key, and an interface for a protocol |
+| `R6` | reject | Symbol: Fish has no runtime reflection | Symbol is runtime reflection, which Fish doesn't have beyond a '[Symbol.iterator]' method and a class's '[Symbol.dispose]' and '[Symbol.asyncDispose]' methods; use a string or an enum for a key, and an interface for a protocol |
 | `R7` | reject | declaration merging and module augmentation: Fish types are closed after they are declared | declaration merging and module augmentation reopen a type after it is declared, and Fish types are closed; give everything in one declaration, or a new name |
 | `dynamicRegex` | reject | regexes built while the program runs: Fish compiles every regex while compiling | - |
 | `G1` | guided | any: choose a concrete type, a union, unknown narrowed before use, or the dynamic Json value | 'any' turns type checking off, which Fish doesn't do; choose a concrete type, a union, 'unknown' narrowed with 'typeof' or 'instanceof' before use, or the dynamic 'Json' value |
@@ -111,6 +111,7 @@ the rest. `auto` (weight 0): `fishc lint --fix` rewrites it. `unsupported` (weig
 | `G9` | guided | .call, .apply and .bind: pass the receiver explicitly or use a closure | '.call', '.apply' and '.bind' choose a function's 'this' at run time; pass the receiver as an argument, or use a closure |
 | `G10` | guided | an async callback passed to forEach: use for...of with await, or spawned tasks | 'forEach' doesn't wait for an async callback; use 'for...of' with 'await', or spawn a task for each |
 | `G11` | guided | a value aliased and changed from two names: Rc<T> in one thread, shared<T> across tasks, a .clone(), or restructuring | hold one value, changed through one while the other is still used, which Fish's ownership refuses; share it as 'shared<T>', give one its own '.clone()', or restructure so one name is used at a time |
+| `G12` | guided | DisposableStack, and Symbol.dispose and Symbol.asyncDispose beyond a class's methods: give a class a [Symbol.dispose]() method, which runs when an instance is dropped, or an async [Symbol.asyncDispose]() one for 'await using' | Fish disposes through a class's own methods alone: '[Symbol.dispose]()', which it runs when an instance is dropped, and 'async [Symbol.asyncDispose]()', which an 'await using' declaration awaits; 'DisposableStack', a call of either by hand, and either member on an object literal or an interface aren't in Fish yet, so give a class the method and let its instance go out of scope |
 | `destructuring` | guided | destructuring Fish can't take as written: computed keys known only at run time, a default on a whole destructured parameter, or nesting, defaults and rest in a loop head; name the parts, or destructure in the body | - |
 | `localCaptures` | guided | a class or enum declared inside a function that uses the function's variables: pass them to its constructor | - |
 | `destructuringAssignment` | guided | a destructuring assignment used as a value or as a for update: write it as a statement of its own | - |
@@ -153,8 +154,9 @@ the rest. `auto` (weight 0): `fishc lint --fix` rewrites it. `unsupported` (weig
 
 ## 4. What the lint rewrites, and the review marker
 
-Each rewrite is made only when the source alone makes it certain; otherwise the same rule id is
-printed as `guided`. `A5`, `A6`, `A7` and `A10` are the lint's own and not in the survey's table.
+Each rewrite is made only when the source alone makes it certain; otherwise the hit stays, most
+often with the same rule id printed as `guided`, and sometimes still as `auto` with the reason it
+couldn't be made (`a comment sits where this change would go`). `A5`, `A6`, `A7` and `A10` are the lint's own and not in the survey's table.
 
 | Rule | Rewrite | Not made when |
 | --- | --- | --- |
@@ -218,6 +220,7 @@ A std module is imported under its Node name, with or without `node:`. A member 
 | `process` | process, for argv, env, exit, platform, arch, execPath, cwd, chdir, pid, on, once, kill, signals, stdout.write and stderr.write |
 | `url` | url, for fileURLToPath and pathToFileURL |
 | `util` | util, for format, inspect, isDeepStrictEqual and parseArgs |
+| `sqlite` | the sqlite module's Database, each call awaited |
 | `zlib` | zlib, for gzipSync, gunzipSync, deflateSync, inflateSync, deflateRawSync, inflateRawSync and unzipSync, and those seven as promises |
 
 Replaced by globals or other std names: `dgram` by UdpSocket; `net` by TcpListener, TcpStream,
@@ -226,7 +229,8 @@ readLine global and the stdin module, for lines, text and bytes; `stream` by Rea
 WritableStream, as globals; `string_decoder` by TextDecoder, with fatal; `timers` by the setTimeout
 and setInterval globals; `timers/promises` by sleep; `worker_threads` by spawn and spawnBlocking.
 Nothing in the release (the survey prints `planned: <feature>`): `async_hooks`, `console`, `events`,
-`http`, `http2`, `https`, `querystring`, `sqlite`, `test`, `tls`, `tty`. Not in the table (`nothing
+`http`, `http2`, `https`, `querystring`, `test`, `tty`. The survey prints `planned: node:tls` for
+`tls` too, though std has a `tls` module with `connect` alone (`std.md`). Not in the table (`nothing
 planned`): `cluster`, `constants`, `diagnostics_channel`, `dns`, `domain`, `inspector`, `module`,
 `punycode`, `repl`, `sys`, `trace_events`, `v8`, `vm`, `wasi`.
 
@@ -526,14 +530,28 @@ Enums port as written, but a `switch` covering every member does not count as re
 append copies the string: 200,000 took 3 seconds in a release build; `push` then `join` took none.
 
 ### 7.12 Module forms
-| TypeScript | fishc 0.1.1 |
+| TypeScript | fishc 0.1.3 |
 | --- | --- |
 | `import { a, b as c } from "./x"`, `import d from "./x"`, `import type`, `export default`, `export { a as b }`, `export * from "./x"` | accepted; write `./x` or `./x.fsh` |
 | `import * as fs from "node:fs"`, `import fs from "node:fs"` | accepted for std modules |
-| `import * as x from "./x"` | `error[E0801]: namespace imports aren't supported yet; import the names you use, as in 'import { a, b } from "./util.fsh"'` |
+| `import * as x from "./x"` | `error[E0801]: namespace imports aren't supported yet; import the names you use, as in 'import { a, b } from "./x"'` |
 | `import x = require("./x")`, `const x = require("./x")` | `error[E0801]: 'import util = ...' isn't supported yet; import what you use with 'import { a, b } from "./file"'`, `error[E0401]: unknown function 'require'` |
 | `export = f`, `await import("./x")`, `namespace N { }` | `error[E0801]`: `exports are not supported yet`, `dynamic imports are not supported yet`, `namespaces are not supported yet` |
 | `import { h } from "@/lib/x"` | `error[E0902]: can't find the package '@/lib'`: write the relative path |
+
+### 7.13 Cleanup, task lists, SQLite, tracing, API documents
+
+| TypeScript | Fish |
+| --- | --- |
+| a class with `[Symbol.dispose]()`, and `using r = open()` | the same text; the method also runs for a `const`, and a `using` binding can't be moved or stored (`ownership.md`, section 18) |
+| `async [Symbol.asyncDispose]()`, `await using` | the same, in an async function (`errors-async.md`, section 18) |
+| `DisposableStack`, `r[Symbol.dispose]()` by hand, a disposer on an object literal or an interface | `G12`: make it a class with the method and end the value by ending its scope |
+| `Promise.all` over tasks that should stop when one fails; `p-all`, `p-map` | `await taskGroup(async (group) => { ... })` (`errors-async.md`, section 17); a concurrency limit still needs a `Semaphore` |
+| `node:sqlite`, `better-sqlite3`, `sqlite3` | `import { Database } from "sqlite"`, every call awaited (`std.md`, section 11) |
+| the OpenTelemetry API and SDK packages | `fish:trace` (`std.md`, section 12) |
+| `swagger-jsdoc`, `@fastify/swagger`, `@hono/zod-openapi`, `tsoa` | `Router` handlers that say their types, then `fishc openapi` (`toolchain.md`, section 18) |
+
+The survey sorts each of those packages under `in std`.
 
 ## 8. Choosing a parameter's mode
 
@@ -588,12 +606,3 @@ ordinary input, an empty one, a missing argument and a malformed file. Expect th
 - Output order can change, because a promise starts when awaited, not when made (7.8).
 - For a server, drive the ported `Router` with `app.handle(new Request(...))` and compare statuses
   and bodies with the original's responses (7.9).
-
-## Not released yet
-
-In the compiler's source, not in fishc 0.1.1: `using` and `await using` declarations (the release
-fails to parse `using r = new R();`), with a guided rule `G12` for `DisposableStack` and for
-`Symbol.dispose` anywhere but a class's own `[Symbol.dispose]()` method; a std `sqlite` module, so
-`node:sqlite`, `better-sqlite3` and `sqlite3` move to `in std` (the release answers
-`error[E0908]`); and dependency mappings for `p-all` and `p-map`, the OpenTelemetry packages and
-the OpenAPI generators.

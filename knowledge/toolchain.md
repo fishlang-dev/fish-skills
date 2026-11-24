@@ -4,7 +4,7 @@ How to drive the compiler and lay out a project: every `fishc` command and flag,
 the cache, diagnostics, `fish.toml`, dependencies, import resolution, `fishc test`, the formatter
 and the editor support. The language itself is in `language.md`, C, npm and Rust linking in
 `interop.md`, the migration lint's rules and `fishc survey` in `porting.md`, each error code in
-`errors.md`. Checked against fishc 0.1.1 on macOS ARM64; every session below was run, with long
+`errors.md`. Checked against fishc 0.1.3 on macOS ARM64; every session below was run, with long
 output trimmed. `$` lines are typed, `exit=` shows the exit code where it matters.
 
 ## 1. Installing, and what the machine needs
@@ -48,12 +48,15 @@ prints the usage text. Both exit 2.
 | `fishc lint [<path>...] [--fix]` | The TypeScript migration lint. |
 | `fishc survey <dir> [--compare <old.json>] [--json]`, `fishc survey --rank <dir>...` | Grade a TypeScript project's portability. |
 | `fishc explain <code>` | The long explanation of an error or warning code. |
+| `fishc explain-borrows <file.fsh> [--fn <name>]` | Print a file with each move, loan and ownership error marked under its line (section 18). |
+| `fishc openapi <file.fsh> [-o <out>]` | Print the OpenAPI document of the program's `Router` routes (section 18). |
 | `fishc parse <file.fsh>` | Parse only: silent and 0, or the syntax error and 1. |
 | `fishc lsp` | The language server, over stdio (section 15). |
 
 **Exit codes.** 0: done, warnings included. 1: a compile error, a failed clang, a failing test, a
-lint hit, a file `fmt --check` would change. 2: wrong usage, an unknown flag, no `fish.toml`
-where one is needed, an invalid package name. `fishc run` gives the program's own code: 101 for a
+lint hit, a file `fmt --check` would change, and a flag's value `build` can't use (an unknown
+`--target` or `--sanitize`, `--static` with no musl target). 2: wrong usage, an unknown flag, no
+`fish.toml` where one is needed, an invalid package name. `fishc run` gives the program's own code: 101 for a
 panic, 128 plus the signal number when a signal ended it.
 
 ## 3. check, build, run, watch
@@ -245,9 +248,10 @@ function main() {
 ```
 
 Warnings have the same shape with `warning[CODE]`, never fail a build, and are printed by
-`check`, `build`, `run` and `watch` alike. There are two: `W0001`, an unused variable or
-parameter (`warning[W0001]: unused variable 'unused'; if it's intentional, name it '_unused'`),
-and `W0002` (`unreachable code after 'return'`).
+`check`, `build`, `run` and `watch` alike. Those commands have two: `W0001`, an unused variable
+or parameter (`warning[W0001]: unused variable 'unused'; if it's intentional, name it '_unused'`),
+and `W0002` (`unreachable code after 'return'`). A third, `W0003`, comes only from `fishc openapi`
+(section 18).
 
 `fishc explain E0201` (the code in either case) prints what the code means, what TypeScript
 would have done, and a fix; some codes answer only that they have no longer explanation yet.
@@ -372,8 +376,9 @@ The specifier decides, in this order:
    the lib exports (re-exports included) is visible; `export` in a package's other files is for
    the package itself.
 2. **A std module**, `node:fs` or bare `fs`: `assert`, `buffer`, `child_process`, `crypto`,
-   `fs`, `fs/promises`, `os`, `path`, `process`, `tls`, `url`, `util`, `zlib`, plus `postgres`,
-   `fish:tar`, `fish:zip` and `bun`. Their contents: `std.md`. The prelude (`console`, `Map`,
+   `fs`, `fs/promises`, `os`, `path`, `path/posix`, `process`, `stdin`, `tls`, `url`, `util`,
+   `zlib`, plus `postgres`, `sqlite`, `fish:tar`, `fish:zip`, `fish:trace` and `bun`. Their
+   contents: `std.md`. The prelude (`console`, `Map`,
    `sleep`, `assert`, `process` and so on) needs no import.
 3. **`rust:<crate>`**: a crate from `[rust-dependencies]` (`interop.md`).
 4. **Any other bare name**: an npm package, found as TypeScript's bundler resolution finds its
@@ -575,6 +580,7 @@ Mac with a warm cache; std is checked with every program, which is most of the 0
 | Does it type- and borrow-check? | `fishc check f.fsh` (or `fishc check` in a package) | 0.1 s | silent or warnings, exit 0; errors, exit 1 |
 | Does it run correctly? | `fishc run f.fsh -- args` | 0.7 s | the program's output and exit code; 101 is a panic |
 | Do the tests pass? | `fishc test` | 0.7 s and up | `N passed, M failed`, exit 1 on any failure |
+| Where does this value move or get lent? | `fishc explain-borrows f.fsh --fn name` | 0.1 s | the function's source with a note under each move and loan |
 | Does it leak? | `fishc run f.fsh --leaks` | 0.7 s | a `fish: leaked` report on stderr, or nothing |
 | Is it formatted? | `fishc fmt --check f.fsh` | 0.03 s | paths that would change, exit 1 |
 | Does it still work optimized? | `fishc run f.fsh --release` | 0.7 s | overflow wraps instead of panicking |
@@ -589,11 +595,33 @@ Mac with a warm cache; std is checked with every program, which is most of the 0
   second on the first launch of each freshly linked binary.
 - A single scratch file needs no package; tests and Fish dependencies do (`fishc new`).
 
-## Not released yet
+## 18. explain-borrows and openapi
 
-In the compiler's source, refused by fishc 0.1.1 (both print the usage text, exit 2):
+`fishc explain-borrows <file.fsh>` prints the file with a note under every place a value moves
+or is lent, and under each ownership error with the line that caused it. `--fn <name>` prints one
+function. It is the fastest way to see why E0201 or a borrow error fires, and which parameter
+should have been a `Ref<T>`. The file must type-check first: a type error is printed as usual,
+exit 1. An ownership error is part of the output, exit 0, and the function isn't analysed past it.
 
-- `fishc explain-borrows <file.fsh> [--fn <name>]`: prints a file with its moves, loans and
-  ownership errors marked under the lines they happen on, for one function or all.
-- `fishc openapi <file.fsh> [-o <out>]`: prints the OpenAPI document of the routes a program
-  adds to std's `Router`, with the title and version from the package's manifest.
+```
+ 5 | function main() {
+ 6 |   const nums = [1, 2, 3];
+ 7 |   const kept = keep(nums);
+   |                     ^^^^ 'nums' moved here: passing it to 'keep' hands it over, as if 'keep' kept it; pass 'nums.clone()' to keep a copy
+ 8 |   console.log(kept, nums.length);
+   |                     ^^^^^^^^^^^ error[E0201]: 'nums.length' can't be used here because 'nums' was moved
+   |                                 line 7: 'nums' moved here: passing it to 'keep' hands it over, as if 'keep' kept it; pass 'nums.clone()' to keep a copy
+   |                                 the rest of this function isn't analysed past this error
+ 9 | }
+```
+
+A loan reads `'nums' is lent to 'total' for this call`, or `'xs' is lent to the 'for...of' loop`.
+
+`fishc openapi <file.fsh> [-o <out>]` checks the program and prints an OpenAPI 3.1.0 document,
+as JSON, of the routes it adds to std's `Router`. It reads handlers that say their types
+(`std.md`, section 4): the body parameter's type becomes the request schema with a 400 response
+beside it, the return type the 200 response, `Promise<void>` a 204, and `:id` a path parameter
+`{id}`. A handler returning a `Response` is listed with a `default` response only. The title and
+version come from `fish.toml`, or are the file's name and `0.0.0` outside a package. A route
+whose path isn't written as a string literal is left out with warning W0003 (`this route is left
+out of the document: its path isn't written as a string`), exit 0.

@@ -5,7 +5,7 @@ and `unsafe`, Fish exported to C with `fishc build --lib`, npm packages typed fr
 files and run in an embedded JavaScript engine, and Rust crates through a generated shim. Fish
 packages, `fish.toml` and the registry are in `toolchain.md`; std's `node:` modules and the `Bun`
 global are in `std.md`; handles follow the ownership rules of `ownership.md`. Checked against
-fishc 0.1.1 on macOS arm64, with clang, cargo and Bun installed.
+fishc 0.1.3 on macOS arm64, with clang, cargo and Bun installed.
 
 ## 1. Which door to use
 
@@ -303,10 +303,9 @@ A declaration Fish can't type is refused only when the program calls it, at the 
 can't cross between Fish and JS yet: Fish has no JS form for it`), with a note at the call
 (`note: 'when' is called here`).
 
-**Symptom**: `fishc` exits with status 139 and prints nothing. **Why**: 0.1.1 crashes when a
-program imports a function its declaration file declares more than once (overloads), called or
-not. **Fix**: none in the release; import another export, or wrap the package in one of your own
-that declares one signature. An overloaded method of an interface is typed by its first
+A function its declaration file declares more than once (overloads) is imported with every
+signature: with `twice(x: number): number` and `twice(x: string): string` declared, `twice(2)` and
+`twice("ab")` both type and run. An overloaded method of an interface is typed by its first
 signature. More: the compiler's `tests/unit/typings.fsh` and `tests/unit/npm.fsh`.
 
 ## 9. npm packages: what runs, and what it costs

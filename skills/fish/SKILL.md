@@ -40,6 +40,9 @@ are here so the worst mistakes are avoided before a slice is open.
   inside a larger expression.
 - **An `interface` is a trait.** Data is a `type`. `Entry[]` of an interface is refused.
 - **A `switch` that names every member still "doesn't return on all paths".** Use `match`.
+- **A class's `[Symbol.dispose]()` runs whenever an instance is dropped**, under `const` too, and
+  can't be called by hand. `using` adds only that the value can't leave its block. An
+  `async [Symbol.asyncDispose]()` runs only under `await using`.
 - **`fishc check` is not a build.** It skips comptime code, top-level initializers and test
   bodies. Build or run before saying it compiles; run `fishc test` before saying tests pass.
 
@@ -54,9 +57,9 @@ are here so the worst mistakes are avoided before a slice is open.
 | The work involves | Read |
 | --- | --- |
 | Any Fish code at all | `language.md` (skim the section you need) |
-| Moves, borrows, `Ref`, `Mut`, `clone`, `Rc`, `shared` | `ownership.md` |
+| Moves, borrows, `Ref`, `Mut`, `clone`, `Rc`, `shared`, drop, disposers, `using` | `ownership.md` |
 | Types, classes, interfaces, generics, unions, narrowing | `types.md` |
-| `throws`, `try`, panics, `async`, tasks, channels, locks | `errors-async.md` |
+| `throws`, `try`, panics, `async`, tasks, task groups, channels, locks, `await using` | `errors-async.md` |
 | `comptime`, macros, decorators, derive, typed JSON | `meta.md` |
 | Calling anything from std, HTTP, files, processes | `std.md`, then search `std-api.md` for the exact signature |
 | C, `unsafe`, `.d.ts`, npm, Rust crates | `interop.md` |

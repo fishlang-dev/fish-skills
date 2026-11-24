@@ -38,7 +38,7 @@ is right beats one that says more.
 - Point at the example bank for depth instead of repeating it: "More: `examples/borrow.fsh`".
 - A last section, `## Not released yet`, lists what the compiler's source has that the release the
   slice was checked against doesn't. Leave it out when there is nothing to list.
-- 300 to 600 lines. Past that, the slice is doing another slice's work.
+- 300 to 700 lines. Past that, the slice is doing another slice's work.
 
 ## Examples are checked
 

@@ -4,7 +4,7 @@ What a Fish program can call with no dependency: how names are found, which Node
 exist and where they differ, and one program per area to adapt. `std-api.md` lists every
 declaration and signature; this slice says what to reach for and what is missing. Tasks, `spawn`,
 `Channel`, `Lock` and `throws` are in `errors-async.md`, moves and borrows in `ownership.md`,
-`@derive(Json)` in `meta.md`, npm packages and C in `interop.md`. Checked against fishc 0.1.1.
+`@derive(Json)` in `meta.md`, npm packages and C in `interop.md`. Checked against fishc 0.1.3.
 Assume nothing from Node or the browser exists until it is named here or in `std-api.md`.
 
 ## 1. How names are found
@@ -16,8 +16,8 @@ Three kinds of name need no install:
   sockets, and the rest of section 3.
 - **Modules**, imported as `node:<name>` or `<name>` (`"node:fs"` and `"fs"` are the same module).
   Named, default and `* as` imports all work. `"bun"` names the `Bun` module.
-- **`fish:` modules**, `fish:tar` and `fish:zip`, reached only with the prefix: a bare `"tar"` is
-  looked up as an npm package.
+- **`fish:` modules**, `fish:tar`, `fish:zip` and `fish:trace`, reached only with the prefix: a
+  bare `"tar"` is looked up as an npm package.
 
 A module's name also works as a global when a member is read from it, so `path.join(...)`,
 `fs.existsSync(...)`, `os.platform()`, `crypto.randomUUID()`, `util.format(...)`, `zlib.gzipSync(...)`,
@@ -73,16 +73,20 @@ Every importable module in the release. "Lacks" names what an agent is most like
 | `util` | `format`, `inspect`, `isDeepStrictEqual`, `parseArgs` | `promisify`, `types`, `%j`, `inspect` options |
 | `zlib` | `gzip`, `gunzip`, `deflate`, `inflate`, `deflateRaw`, `inflateRaw`, `unzip`, each also as `*Sync` | brotli, streams |
 | `postgres` | `Pool` with `query`, `queryOne`, `execute` | transactions that span statements |
+| `sqlite` | `Database` (`open`, `query`, `queryOne`, `run`, `prepare`, `close`), `Statement`, `SqliteError`, `RowError` (section 11) | transactions as a call, named-parameter objects, synchronous calls |
 | `fish:tar`, `fish:zip` | `entries`, `list`, `extract`, `pack`, `create` | |
+| `fish:trace` | `span`, `configureTracing`, `flushTraces` (section 12) | metrics, logs, other exporters than OTLP over HTTP |
 | `bun` | `file`, `write`, `stdin`, `env`, `argv`, `sleep`, `sleepSync`, `which`, `spawn`, `spawnSync`, `serve`, `version` | everything else in Bun |
 
 Not modules at all: `http`, `https`, `net`, `dgram`, `dns`, `events`, `stream`, `readline`,
 `timers`, `timers/promises`, `worker_threads`, `querystring`, `perf_hooks`, `test`. Globals do
 their work: `serve` and `fetch`, the sockets of section 8, `ReadableStream`, `readLine`,
 `setTimeout` and `sleep`, `spawn` and `spawnBlocking`, `URLSearchParams`, `performance.now()`.
+`taskGroup` is built into the compiler and so is missing from `std-api.md`; it is in
+`errors-async.md`, section 17.
 
 A module's error classes are imported with it (`ExecError`, `ZlibError`, `TarError`, `ZipError`,
-`PostgresError`, `RowError`). `Error`, `TypeError`, `IoError`, `JsonError`, `AbortError`,
+`PostgresError`, `SqliteError`, `RowError`). `Error`, `TypeError`, `IoError`, `JsonError`, `AbortError`,
 `ParseArgsError` and `AggregateError` are globals. An `Error` has `name`, `message` and `cause`,
 no `stack`. There is no `SyntaxError`, and `RangeError` exists only in a program naming `Buffer`.
 
@@ -302,6 +306,40 @@ async function main(): Promise<void> throws IoError {
   await serve({ port: 8080 }, app.handler());
 }
 ```
+
+**Handlers that say their types.** A route's handler may take the request's JSON body as a
+second, typed parameter, and may write a return type that isn't a `Response`. The body is read
+and checked before the handler runs (a 400 with the reason otherwise, and the handler never
+runs), the value is answered as JSON with status 200, and `Promise<void>` answers 204. It
+replaces `await req.json<T>()` in a `try`, and it is what `fishc openapi` reads (`toolchain.md`).
+
+```fsh
+type NewUser = { name: string; age?: i64 };
+type User = { id: i64; name: string };
+
+async function show(app: Ref<Router>, method: string, path: string, body: string) {
+  const res = await app.handle(new Request("http://h" + path, { method, body }));
+  const text = await res.text();
+  console.log(res.status, res.headers.get("content-type") ?? "none", text);
+}
+
+async function main() {
+  let app = new Router();
+  app.post("/users", async (_req, body: NewUser): Promise<User> => ({ id: 4, name: body.name }));
+  app.get("/users/:id", async (req): Promise<User> => ({ id: 7, name: req.path }));
+  app.delete("/users/:id", async (_req: Request): Promise<void> => {});
+  await show(app, "POST", "/users", "{\"name\":\"ann\"}"); // expect: 200 application/json {"id":4,"name":"ann"}
+  await show(app, "POST", "/users", "{\"age\":3}");        // expect: 400 text/plain;charset=UTF-8 missing field 'name' at $
+  await show(app, "GET", "/users/7", "");                  // expect: 200 application/json {"id":7,"name":"/users/7"}
+  await show(app, "DELETE", "/users/7", "");               // expect: 204 none
+}
+```
+
+Such a handler takes at most the request and the body, takes no body on a `get` route, and
+can't throw yet (each E0511, shown in `errors.md`): catch inside it and return a `Response`,
+which means writing no return type. Both types must have a JSON form (a class needs
+`@derive(Json)`, a `Set` has none). A named function works as a handler too, typed by its
+declaration.
 
 More: `examples/http.fsh`, `router.fsh`, `cookies.fsh`, `static_files.fsh`,
 `readable_stream.fsh` and `websocket.fsh` there.
@@ -580,20 +618,83 @@ The other borrow an agent meets here is a temporary: `await new Response(x).text
 `const it = [1, 2].values()` are refused with `error[E0204]`, because the method borrows a value
 that is gone at the end of the statement. Give the value a name first.
 
-## Not released yet
+## 11. SQLite
 
-In the compiler's source, and refused by fishc 0.1.1 (the modules with `error[E0902]`):
+`import { Database } from "sqlite"` is std's binding to the system's SQLite, linked only into a
+program that imports it. Every call is async and runs off the worker threads, so each is
+awaited, unlike `better-sqlite3`. `Database.open(path)` takes a file path or `":memory:"`.
+Parameters are positional (`?`) in an array of `null`, booleans (stored 0 or 1), `i64`, `f64`,
+strings and `u8[]`. Rows are read by column name into the type asked for, as `postgres` does.
 
-- **`sqlite`**, over the system's SQLite: `Database.open(path)` (`":memory:"` too),
-  `db.run(sql, params)` giving `{ changes, lastInsertRowid }`, `db.query<T>`, `db.queryOne<T>`,
-  `db.prepare(sql)` giving a `Statement` with `all<T>`, `get<T>` and `run`, and `close()`.
-  Parameters are `?`, errors `SqliteError` and `RowError`.
-- **`fish:trace`**: `span(name)` begins a span under the current one, which follows its task
-  across awaits and into spawned tasks; `span.end()`, `configureTracing({ endpoint, serviceName })`
-  and `flushTraces()`. `serve` makes a span per request and takes `trace: false`.
-- **Typed route handlers**: a handler may take its JSON body as a second, typed parameter and
-  return a value instead of a `Response`. The body is checked before the handler runs (a 400
-  with the reason otherwise), the value is answered as JSON, and a handler returning nothing
-  answers 204, as in `app.post("/users", async (req, body: NewUser): Promise<User> => ...)`.
-- **`fishc openapi <file.fsh> [-o <out>]`** prints the OpenAPI document of the routes a program
-  adds to std's `Router`, from those typed handlers.
+```fsh
+import { Database, RowError, SqliteError } from "sqlite";
+
+type User = { id: i64; name: string; email: string | null };
+
+async function main(): Promise<void> throws SqliteError | RowError {
+  const db = await Database.open(":memory:");
+  await db.run("create table users (id integer primary key, name text not null unique, email text)");
+  const added = await db.run("insert into users (name, email) values (?, ?)", ["ann", null]);
+  console.log(added.changes, added.lastInsertRowid); // expect: 1 1
+
+  const insert = await db.prepare("insert into users (name, email) values (?, ?)");
+  for (const name of ["bob", "cy"]) await insert.run([name, name + "@example.com"]);
+
+  const users = await db.query<User>("select * from users where id > ? order by id", [1]);
+  console.log(users.length, users[0].name, users[0].email); // expect: 2 bob bob@example.com
+  const one = await db.queryOne<User>("select * from users where name = ?", ["ann"]);
+  console.log(one?.email ?? "no email"); // expect: no email
+  const none = await db.queryOne<User>("select * from users where name = ?", ["zed"]);
+  console.log(none); // expect: null
+
+  try {
+    await db.run("insert into users (name) values (?)", ["ann"]);
+  } catch (e) {
+    if (e instanceof SqliteError) console.log(e.code, e.message); // expect: 19 UNIQUE constraint failed: users.name
+  }
+  await db.close();
+}
+```
+
+- `run` gives `{ changes, lastInsertRowid }`; `query<T>` gives `T[]`; `queryOne<T>` gives the
+  first row or `null`. `prepare` gives a `Statement` with `all<T>`, `get<T>` and `run`.
+- A `SqliteError` carries SQLite's primary result code (1 bad SQL, 19 a constraint). A row that
+  doesn't fit `T` (a missing column, a null in a field that isn't `| null`, another type) is a
+  `RowError`. A boolean column comes back as `i64`.
+- One call takes one statement: SQL holding two is refused, and so is a parameter count that
+  doesn't match. A transaction is `begin` and `commit` run as statements.
+- A `Database` is shared by `clone()` and closes when its last clone is dropped, or at `close()`.
+
+More: `examples/sqlite.fsh`.
+
+## 12. Tracing
+
+`fish:trace` records spans and sends them as OTLP JSON over HTTP to the collector at
+`OTEL_EXPORTER_OTLP_ENDPOINT`, or the one given to `configureTracing({ endpoint, serviceName })`.
+With no endpoint, tracing is off: `span` records nothing and its ids are `""`. `span(name)`
+begins a span under the task's current one (a new trace when there is none) and makes it current;
+the current span follows a task across awaits and into the tasks it spawns. `serve` makes a span
+per request unless given `trace: false`.
+
+```fsh
+import { span, configureTracing, flushTraces } from "fish:trace";
+
+function price(id: i64): i64 {
+  using s = span("price");
+  s.set("item", id);
+  return id * 3;
+}
+
+async function main() {
+  configureTracing({ endpoint: "" });
+  let root = span("checkout");
+  console.log(price(4), root.traceId === ""); // expect: 12 true
+  root.end();
+  await flushTraces();
+}
+```
+
+A `Span` ends at `end()`, or where its scope ends when bound with `using`, which covers early
+returns and throws. `set(key, value)` adds a string, `i64` or boolean attribute, so the binding
+is a `let` or a `using`, not a `const`. Finished spans go out in batches; a program about to
+exit awaits `flushTraces()` to send the last ones. More: `examples/trace.fsh`.

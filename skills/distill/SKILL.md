@@ -27,7 +27,7 @@ Files, in `~/.claude/fish/learning/`: `journal.md` (raw), `lessons.md` (curated)
 
        ## Passing an array to a std function moves it
        **When it applies:** calling a std function with a collection you use afterwards.
-       Take what you need from it first, or pass a clone. Checked on fishc 0.1.1.
+       Take what you need from it first, or pass a clone. Checked on fishc 0.1.3.
 
    Name the fishc release each lesson was checked on. A lesson about a refusal goes stale when the
    compiler learns the form.

@@ -5,7 +5,7 @@ are keyed by what you see: the error text with its code, a panic message, or a w
 gives the cause and the fix and names the slice that explains the area. They come from writing
 ordinary TypeScript-style and Rust-style programs and recording every stumble. Sections 9 and 10
 list the forms the compiler parses and then refuses. Every code has a longer explanation in
-`errors.md` and from `fishc explain E0201`. Checked against fishc 0.1.1.
+`errors.md` and from `fishc explain E0201`. Checked against fishc 0.1.3.
 
 ## 1. Values and conditions
 
@@ -195,7 +195,7 @@ function main() { let xs = [1, 2, 3]; for (const x of xs) { if (x === 2) xs.push
 ```
 
 **Wrong output: a change to what `map.get(k)` gave is lost**, and
-`error[E0212]: 'push' changes its array, so call it on a variable or a field` (also for `[...xs].sort(cmp)`)
+`error[E0212]: 'push' changes its array, so call it on a variable or a field` (for `[...xs].sort(cmp)`, `'sort' sorts its array in place, so call it on a variable or a field`)
 **Why**: `get` gives a copy of the value, not a view into the Map, and a changing method on a
 temporary would change nothing that lasts. **Fix**: change the copy, then `set` it back; for a
 sorted copy, `xs.toSorted(cmp)`. (`sort()` with no comparator orders numbers numerically.)
@@ -434,15 +434,6 @@ async function main() throws IoError {
 }
 ```
 
-**`error[E0305]: an async function's return type is 'Promise<T>', the type of what it gives once awaited`**
-on an async arrow, inside a function, whose return type is already written `Promise<T>`
-**Why**: a local async arrow accepts no return annotation in this release. **Fix**: drop it; the
-type is inferred. (Top-level `const f = async (n: i64): Promise<i64> => ...` is accepted.)
-```fsh
-async function main() { const load = async (n: i64): Promise<i64> => n * 3; const v = await load(2); }
-// error: error[E0305]: an async function's return type is 'Promise<T>'
-```
-
 ## 7. Std and modules
 
 **`error[E0908]: 'http' is a Node module Fish's std doesn't have yet`** (also `events`; for
@@ -587,12 +578,41 @@ function main() { let s = "abc"; s = "x" + s.slice(1); s = s.slice(0, 2); consol
 // expect: xb
 ```
 
-## Not released yet
+## 11. Disposal and task groups
 
-The compiler's source has these; fishc 0.1.1 answers them as below, so don't write them for it.
+**Cleanup written in `async [Symbol.asyncDispose]()` never runs** (wrong output, no error)
+**Why**: only `await using` awaits that method. A `const` or `let` of the same value is dropped
+without it, and a drop can't wait. **Fix**: declare the value with `await using`; give the class
+a `[Symbol.dispose]()` too if the release must also happen on a panic (`errors-async.md`, 18).
+```fsh
+class Conn {
+  async [Symbol.asyncDispose](this: Mut<this>): Promise<void> { console.log("flushed"); }
+}
+async function main() {
+  { const _c = new Conn(); console.log("const"); }             // expect: const
+  { await using c = new Conn(); console.log("await using"); }  // expect: await using
+}
+// expect: flushed
+```
 
-- `using r = open();` and `await using`: `error[E0001]: expected ';', found 'r'`. A class's
-  `[Symbol.dispose]` method: `error[E0801]: '[Symbol.dispose]' members are not supported yet`.
-- Task groups, `await taskGroup(async (group) => { ... })`: `error[E0401]: unknown function 'taskGroup'`.
-- `import { Database } from "sqlite"` and `import { span } from "fish:trace"`:
-  `error[E0902]: can't find the package 'sqlite'`, since the release has neither module.
+**`error[E0710]: a '[Symbol.dispose]' method runs when its value is dropped, so it can't be called by hand`**
+**Why**: the TypeScript habit of `r[Symbol.dispose]()`, or a `close()` that calls it, would run
+it twice. **Fix**: end the value: let its block end, or move it into a function.
+
+**`error[E0215]: 'c' can't be moved: it is declared with 'using', so its value belongs to its scope`**
+(also `cannot assign to 'c'`) **Why**: a `using` binding never leaves its block. **Fix**: take a
+`Ref<T>` or `Mut<T>` where it is passed, or declare it `const` if it must be returned or stored.
+
+**`error[E0214]: 'c.log' can't be moved out of 'c': 'Conn' has a '[Symbol.dispose]' method`**
+(and `error[E0213]: can't clone a 'Conn'`) **Why**: the disposer runs on the whole value, once.
+**Fix**: `c.log.clone()`, or declare `clone(): Conn` on the class (`ownership.md`, 18).
+
+**`error[E0306]`, on `group.spawn(...)` inside `forEach` or another nested closure**
+**Why**: a child's error leaves through the group's own arrow, so a child that can throw is
+spawned in that arrow's body. **Fix**: use a `for...of` loop there, or catch inside the child.
+The same cause makes a `try` around `group.spawn` E0603 (`errors-async.md`, 17).
+
+**`error[E0511]: a route's handler that says its types can't throw yet`** (also `a GET request
+carries no body`) **Why**: a handler with a typed body or a typed return value answers through
+JSON and has nowhere to send an error. **Fix**: catch inside and return a `Response`, leaving
+the return type unwritten (`std.md`, section 4).

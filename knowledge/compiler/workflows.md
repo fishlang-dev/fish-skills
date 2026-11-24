@@ -6,7 +6,7 @@ debugging and releasing. Commands are run from the root of the compiler's checko
 step says otherwise, and each was read out of the script it runs. How the compiler is put
 together is in `architecture.md`. Using `fishc` as a tool (flags, `fish.toml`, `fishc test` for
 your own package) is in `toolchain.md`. This slice follows the compiler's main line of
-development after release 0.1.1, not the release.
+development and may be ahead of the release in `VERSION`.
 
 ## 1. What you need
 
@@ -15,9 +15,10 @@ development after release 0.1.1, not the release.
 - macOS or Linux, x86-64 or ARM64. `stage0.toml` pins a release tarball and a digest for ARM64
   macOS only so far; another machine builds stage 0 from source and records its own digest
   (section 2).
-- Time and memory. Building `fishc` takes about 25 minutes on a fast machine, and the compiler
-  holds gigabytes while it compiles itself. Plan work so you build as rarely as you can
-  (section 6).
+- Time and memory. `fishc` compiling itself is the largest Fish build there is and holds
+  gigabytes while it runs: checking `src/` alone took five and a half minutes and peaked at
+  3.7 GiB with release 0.1.3 on a 14-core ARM64 Mac. Plan work so you build as rarely as you
+  can (section 6).
 
 **Bun and Node are references, not tools.** Nothing new in the build, the tests or the
 bootstrap may run them. The compiler's own imports such as `node:fs`, and its `Bun.spawn`
@@ -26,8 +27,11 @@ a real `bun` process today, and should shrink rather than grow:
 
 - building stage 0 from source down to its first commit (`--from-source`), once
 - `src/bundle.fsh`, when a program imports an npm package
-- a few unit tests that ask Bun for JavaScript's answer as a reference (`regex`, `os`, `error`,
-  `inspect`, `native`, `lsp`) and `scripts/casemap.fsh`
+- some unit tests: those that ask Bun for JavaScript's answer as a reference (`regex`, `os`,
+  `error`, `inspect`, `native`, `bun`) and those that run it as the other end of a
+  conversation (`lsp`, `postgres`, `tls`, `websocket`). The CI workflow that runs the unit
+  suite installs Bun for them.
+- `scripts/casemap.fsh`, which takes JavaScript's case mapping from a Bun child process
 
 The editor grammars under `editors/` are JavaScript because their hosts require it. They are
 not part of the compiler's build or of either test suite.
@@ -96,14 +100,20 @@ Two things that surprise people:
 
 The build is one command, `fishc run scripts/build.fsh -- [-o <path>]`. Underneath it runs stage 0
 as `fishc build main.fsh --release -o <out>` inside `src/`, and prints a line a minute while it
-works. There is no incremental build of the compiler itself: every build is the full 25 minutes.
+works. There is no incremental build of the compiler itself: every build is a full one. The
+script announces `about 25 minutes on a fast machine` as it starts and prints
+`built <out> in <n>s` when it ends. Go by the second: the estimate is a fixed string, older
+than the work that, by the project's history, brought the compiler compiling itself to 194 s
+and about 4 GB (a figure not measured again for this slice). The IR of `src/` is over 64 MiB,
+so clang compiles it a file at a time, each object cached by its text (`architecture.md`,
+section 16).
 
 Cheaper checks first, in this order:
 
 ```sh
 fishc check src/main.fsh                      # type and borrow check the whole compiler, no codegen
 fishc run scripts/walkgen.fsh                 # only after an AST change (section 10)
-fishc run scripts/build.fsh                   # about 25 minutes
+fishc run scripts/build.fsh                   # the full build
 build/fishc build hello.fsh -o hello && ./hello
 ```
 
@@ -114,8 +124,8 @@ before and after.
 
 ## 4. The golden programs
 
-`tests/programs/` holds the end-to-end tests: about 250 files and 4,300 programs. The runner is
-`tests/run.fsh`, itself a Fish program:
+`tests/programs/` holds the end-to-end tests: 250 files and 38 directories, about 4,400
+programs (`--list` prints them). The runner is `tests/run.fsh`, itself a Fish program:
 
 ```sh
 build/fishc run tests/run.fsh -- --fishc "$PWD/build/fishc"            # everything, about 2 minutes
@@ -207,8 +217,8 @@ FISHC="$PWD/../../build/fishc" ../../build/fishc test --release "interface" --ti
 - The filter keeps tests whose name, the string given to `test(...)`, contains it. It is not a
   file name.
 - The whole package is built into one program before any test runs, filter or not. Most files
-  import the whole compiler, so the build dominates: the full run takes about 31 minutes, and a
-  filtered run saves only the running.
+  import the whole compiler, so that build is as large as the compiler's own and dominates the
+  run. A filtered run saves only the running.
 - Each test runs in a process of its own. `--timeout <ms>` sets the limit for a test and
   `--jobs <n>` how many run at once.
 
@@ -221,7 +231,10 @@ What some of these tests pin, so you know why one fails:
   program compiles
 - `walk.fsh`, `ast.fsh`: the generated files match what their generators give now
 - `nodes.fsh`: no table keyed by a node, a type or an arena record; no lowering pass changing a
-  node in place
+  node in place (it reads the source for a write to a child field through a short variable
+  name, so a local named `x` or `n` holding something that is not a node can trip it)
+- `instances.fsh`, `irnames.fsh`: one function per instance, and IR names that stay as they
+  are when unrelated code changes
 - `modules.fsh`, `selfhost.fsh`: the module convention, declared `throws`, no module state
 - `format_corpus.fsh`: the compiler's own files format, parse back to the same tree and format
   the same again
@@ -238,9 +251,12 @@ What some of these tests pin, so you know why one fails:
 | formatter, lint, survey, LSP, CLI | check | the matching unit tests |
 | anything that changes emitted IR for the compiler itself | check | golden suite, then the fixpoint (section 11) |
 
-Costs to plan around: check, minutes; build, about 25 minutes; golden suite, about 2 minutes;
-unit tests, about 31 minutes; fixpoint, one to two hours. The golden suite is the default gate.
-Run the unit suite once at the end of a piece of work, not after every edit.
+Costs to plan around, cheapest first. Measured with release 0.1.3 on a 14-core ARM64 Mac: the
+check, five and a half minutes; the golden suite, 4,399 programs in 127 seconds. Not measured
+for this slice, so time your own: the build (section 3), the unit suite (the build of a
+program as large as the compiler, then the tests), and the fixpoint (two builds and three
+prints of the IR). The golden suite is the default gate. Run the unit suite once at the end of
+a piece of work, not after every edit.
 
 ## 7. Adding a language form, end to end
 
@@ -290,8 +306,9 @@ in pipeline order:
 - `ast.fsh` and `unquote.fsh`: regenerated, since the keyword union widened. `walk.fsh` and
   `rebuild.fsh` did not change, because no node gained a child.
 - `check.fsh`, `values.fsh`, `classes.fsh`, `typing.fsh`, `registry.fsh`, `keys.fsh`: a class's
-  `[Symbol.dispose]` method is its disposer, a `Local` gained `using`, and a new `disposers`
-  table in `compilation.fsh` maps each class to the instance a drop runs.
+  `[Symbol.dispose]` method is its disposer (and its `[Symbol.asyncDispose]` method what
+  `await using` awaits), a `Local` gained `using`, and a new `disposers` table in
+  `compilation.fsh` maps each class to the instance a drop runs.
 - `moves.fsh`: two new refusals, moving a `using` binding (`E0215`) and moving a field out of a
   value that has a disposer (`E0214`).
 - `warnings.fsh`: a `using` binding is not reported as unused, since holding the value to the
@@ -324,14 +341,19 @@ calls takes one of the prefixes `stdFor` renames to a name no program can write 
 `__arrayFilled` becomes `array filled`.
 
 **A module** is an entry in `STD_MODULES`, keyed by its bare name (`sqlite`, `fs/promises`,
-`fish:tar`), holding Fish source with ordinary `export`s. `stdModule` makes `node:<name>` and
-`<name>` the same module. Model a module on Node's shape when Node has one.
+`fish:tar`, `fish:trace`), holding Fish source with ordinary `export`s. `stdModule` makes
+`node:<name>` and `<name>` the same module; a module of Fish's own is reached only by its
+`fish:` name, so npm keeps the bare one. Model a module on Node's shape when Node has one. A
+module can lean on a section: `fish:trace` holds the public names, and the code behind them
+is the `TRACE` section, which `stdFor` adds with the HTTP library.
 
 **The C side.** Std reaches the runtime with `declare function fsh_rt_<area>_<name>(...)` in its
 own source and calls inside `unsafe { }`. Define the function in `src/native.fsh`. A part that
 needs a system library is its own text (`TLS_NATIVE`, `ZLIB_NATIVE`, `SQLITE_NATIVE`) and is
 compiled and linked only when the program's IR calls into it: add a `callsX` test, a unit in
-`runtimeUnits` and the `-l` flag in `runtimeLinks`, all in `src/main.fsh`.
+`runtimeUnits` and the `-l` flag in `runtimeLinks`, all in `src/main.fsh`. The `sqlite` module
+is the model: `STD_MODULES.sqlite`, `SQLITE_NATIVE`, `callsSqlite`, `-lsqlite3`, and the
+golden file `tests/programs/sqlite.fsh`.
 
 **What must follow:**
 
@@ -339,8 +361,9 @@ compiled and linked only when the program's IR calls into it: add a `callsX` tes
 - the survey's tables: the Node built-in or npm package the module answers moves from planned
   to std in `src/survey.fsh` and `src/deps.fsh`, with their unit tests in
   `tests/unit/survey.fsh`
-- anything the checker special-cases (a call the checker rewrites, a method on a built-in type)
-  lives in `values.fsh` and `codegen.fsh`, not in std's source
+- anything the checker special-cases (a call the checker rewrites, a method on a built-in type,
+  a call such as `taskGroup` that needs a type of its own) lives in `values.fsh` and
+  `codegen.fsh`, not in std's source
 
 ## 9. Adding an error code
 
@@ -383,8 +406,9 @@ fishc run scripts/fixpoint.fsh -- --from "$PWD/build/fishc" --out /tmp/fixpoint
 The compiler given with `--from` is generation 1. It prints the IR of `src`, builds generation 2,
 which prints the IR and builds generation 3, which prints the IR. Generations 2 and 3 must emit
 identical IR; the script exits 1 when they differ and reports where (`cmp`'s byte offset). It
-also says whether generations 1 and 2 agree. Each generation is a full build, so the run takes
-one to two hours. `--out` keeps the binaries and IR files.
+also says whether generations 1 and 2 agree. The run is two full builds and three prints of
+the IR, and it prints each step's seconds; the script's own header calls it about an hour.
+`--out` keeps the binaries and IR files.
 
 Run it when a change could alter the code `fishc` generates for itself or make output depend on
 something other than the source: codegen, layout, symbol or struct naming, anything that
@@ -405,8 +429,12 @@ fishc run scripts/memsites.fsh -- check check src/main.fsh
 - `--timings` works on `build`, `check`, `run` and `watch`. It prints `parse`, `macros`,
   `check`, `moves`, `comptime`, `codegen`, `compile`, `runtime`, `link` and `total`, with notes
   such as `(cache miss)` and how many objects were cached.
+- `--timings` on `check` prints the five front-end stages; on `watch` it adds `reload`,
+  `instrument`, `split` and codegen's parts.
 - `FISH_MEM=1` adds a table of resident and peak memory per stage, the counts of instances,
-  bodies and classes, and how many entries each per-instance table holds.
+  body checks, bodies, bodies lowered apart and classes, and how many entries each
+  per-instance table holds. A plain build (`fishc build`) empties the tables of instances it
+  never compiles, so its table counts are lower than `fishc check`'s for the same source.
 - `scripts/memsites.fsh -- <parse|check|codegen> [--fishc <path>] [--top <n>] <fishc arguments>`
   runs a `--leaks` build of the compiler with `FISH_MEM_STOP` naming the stage, so it ends
   there, and prints what is still live by function and by allocation site, largest first. The
@@ -431,7 +459,7 @@ here. What works:
 1. **Print before you guess.** Find out which instance and which node the failure is in. An
    internal error names the kind it had no lowering for; add a temporary print of the
    instance's `symbol`, the node's `kind`, `id` and span at the failing point, rebuild once,
-   and read it. A theory formed without that costs a 25-minute build to disprove.
+   and read it. A theory formed without that costs a full build to disprove.
 2. **Reduce it.** With the symbol and the span, cut the function out of `src/` into a small
    program that fails the same way, and work on that with the golden runner's speed.
 3. **Keep the old path behind a switch.** When you change how something is lowered or read,
@@ -444,9 +472,17 @@ here. What works:
    one makes later passes read the unlowered node with tables filled in for the lowered one.
    If a replacement is wrong, fix what made it.
 5. **Grep the mutable accessors too.** When you change how bodies or instances are read
-   (`bodyOf`, `instanceOf`), also search for `bodyMut`, `instanceMut`, `swapBody` and
-   `swapInstance`. A write through one of them is a read path as well, and it is easy to
+   (`bodyOf`, `instanceOf`), also search for `bodyMut`, `instanceMut`, `swapBody`,
+   `swapInstance` and the same for a body lowered apart (`loweredOf`, `loweredMut`,
+   `swapLowered`). A write through one of them is a read path as well, and it is easy to
    convert every reader and leave a writer on the old representation.
+6. **Know which build you are in.** A bug that shows in `fishc build` and not in `fishc check`
+   or the language server may be the plain build: there an instance's `locals`, `jumps` and
+   `raises` hold values by id with no node, `types` and `coercions` hold few sites, and an
+   instance that is never compiled has had its tables emptied. Code that iterates a table's
+   nodes, or reads the tables of an instance that is not concrete, sees nothing there. An
+   instance may also be compiled from its own copy of the body: read it with
+   `bodyOf(arenas, instance)` (`architecture.md`, sections 5 and 9).
 
 `FISH_WATCH_IR=<dir>` writes each watch build's IR for later comparison, and codegen can be
 asked to go past a function it fails on and list every failure (`Session.failed`), which the
@@ -480,26 +516,46 @@ one pull request per release, from the release branch. After that is merged, the
 branch is cut from the latest `main`. Treat the release branch like `main`: do not push to it
 or merge into it without the maintainer's say.
 
-**Cutting a release.** Needs a `build/fishc` and a clean working tree.
+**CI.** Three workflows in `.github/workflows/`, and each file's header comment says when it
+runs: read it there, since the triggers change more often than the scripts. `selfhost.yml`
+builds with `sh scripts/bootstrap.sh` and runs the golden programs and the unit suite with the
+commands of sections 4 and 5. `nightly.yml` packs a nightly tarball. `release.yml` cuts
+releases.
+
+**Cutting a release.** A release is cut by `release.yml` on a runner, never by hand, since a
+tarball built elsewhere is not the binary the promotion step compares against. The version
+comes from the release branch's name (`release/v<version>`). In order, each step only once
+those before it passed:
+
+1. build the `fishc` that runs the scripts, with `sh scripts/bootstrap.sh`
+2. cut: `scripts/release.fsh -- <version>`, then push the release commit and the tag
+3. pack (`scripts/release.fsh -- --pack <version>`) and publish the tarball and its sha256 as
+   a GitHub release, with the version's `CHANGELOG.md` section as its notes
+4. promote: `scripts/promote.fsh -- <version>`, then commit `stage0.toml` as
+   `build: pin the v<version> release as stage 0` and push it
+
+A run made again takes up where the last one stopped: what is already tagged, published or
+pinned is left as it is. Every release tarball is built on CI, so the scripts are run by hand
+only to try them or to pack a nightly. Each needs a `build/fishc`, and cutting needs a clean
+working tree:
 
 ```sh
-build/fishc run scripts/release.fsh -- 0.1.2          # bump, changelog, commit, tag; pushes nothing
-build/fishc run scripts/release.fsh -- --pack 0.1.2   # tarball of the tagged release under dist/
-build/fishc run scripts/release.fsh -- --nightly      # tarball of HEAD named for today, no commit or tag
+build/fishc run scripts/release.fsh -- <version>          # bump, changelog, commit, tag; pushes nothing
+build/fishc run scripts/release.fsh -- --pack <version>   # tarball of the tagged release under dist/
+build/fishc run scripts/release.fsh -- --nightly          # tarball of HEAD named for today, no commit or tag
 ```
 
 The first form sets the version in `fish.toml`, writes a `CHANGELOG.md` section from the
 conventional commits since the last tag (`feat`, `fix` and `perf`; refactors, tests, chores and
 docs are left out), makes a release commit and an annotated `v<version>` tag. Commit subjects
-are therefore part of the release: write `feat: what a user can now do`. Pushing the tag runs
-the release workflow, which packs and publishes; `--pack` does the packing on this machine. The
-tarball's `fishc` is built from the commit's own tree at `/tmp/fish-stage0/<commit>`, so any
-machine building that commit there gets the same binary.
+are therefore part of the release: write `feat: what a user can now do`. The tarball's `fishc`
+is built from the commit's own tree at `/tmp/fish-stage0/<commit>`, so any machine building
+that commit there gets the same binary.
 
-**Promoting stage 0.** After a release is published:
+**Promoting stage 0.** The workflow's last step, and only for a release that is published:
 
 ```sh
-build/fishc run scripts/promote.fsh -- 0.1.2 [--tarball <path>] [--no-fixpoint]
+build/fishc run scripts/promote.fsh -- <version> [--tarball <path>] [--no-fixpoint]
 ```
 
 It builds the tagged commit at its fixed path with the stage 0 pinned now, requires that

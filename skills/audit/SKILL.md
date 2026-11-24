@@ -18,7 +18,9 @@ imports.
    parameter that is only read forces callers to clone or give up their value. For every
    `.clone()`: is a second copy wanted, or was it added to quiet a move error? Clones in loops and
    of large collections first. For every `Rc` and `shared`: is the value really shared, or would a
-   borrow do?
+   borrow do? `fishc explain-borrows <file>` shows each move and loan. A class holding something
+   that must be released (a handle, a lock, a transaction) should release it in
+   `[Symbol.dispose]()`, not in a `close()` callers can forget.
 3. **Safety pass.** Every `unsafe` block: what invariant does it rely on, and is it stated and
    true? Pointer lifetimes across calls and awaits, lengths passed to C, strings crossing the
    boundary, who frees. Every `!`: can the value be absent on some path? Every `as` between
@@ -26,7 +28,7 @@ imports.
 4. **Errors pass.** `throws` clauses that are wider than what is thrown; caught errors that are
    dropped; panics used for conditions a caller could handle; integer arithmetic on outside input
    that can overflow (a panic in debug builds, a wrap in release).
-5. **Concurrency pass.** Spawned tasks nobody awaits; futures created and never awaited (they
+5. **Concurrency pass.** Spawned tasks nobody awaits (a `taskGroup` would own them); futures created and never awaited (they
    never run); a lock held across an `await`; shared state that one owner and a channel would
    serve better; unbounded queues.
 6. **Habits pass.** TypeScript patterns that compile and cost: string building in a hot loop,
