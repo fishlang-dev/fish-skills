@@ -1,0 +1,12 @@
+{
+  "name": "fish",
+  "version": "0.1.0",
+  "description": "Deep knowledge of Fish Lang (.fsh): TypeScript syntax with Rust ownership, compiled to native binaries. Writes, ports, debugs, tests and audits Fish code, and helps work on the fishc compiler, checking everything against the real compiler.",
+  "author": {
+    "name": "The Fish Lang contributors",
+    "url": "https://github.com/fishlang-dev"
+  },
+  "license": "MIT OR Apache-2.0",
+  "repository": "https://github.com/fishlang-dev/fish-skills",
+  "hooks": "./hooks/hooks.json"
+}

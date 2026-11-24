@@ -1,0 +1,806 @@
+// case: recursive_list
+// expect: 1
+// expect: 6
+// expect: 6 10
+type Node = { value: i64; next: Node | null };
+function sum(n: Node): i64 {
+  const next = n.next;
+  if (next === null) return n.value;
+  return n.value + sum(next);
+}
+function main() {
+  const tail: Node = { value: 3, next: null };
+  const mid: Node = { value: 2, next: tail };
+  const n: Node = { value: 1, next: mid };
+  console.log(n.value);
+  const copy = n.clone();
+  console.log(sum(copy));
+  let short: Node = { value: 1, next: { value: 2, next: { value: 3, next: null } } };
+  const before = sum(short.clone());
+  short.next = { value: 9, next: null };
+  console.log(before, sum(short));
+}
+// case: recursive_union
+// expect: -3
+// expect: 15
+type Expr = { kind: "num"; n: i64 } | { kind: "add"; left: Expr; right: Expr } | { kind: "neg"; of: Expr };
+function ev(e: Expr): i64 {
+  if (e.kind === "num") return e.n;
+  if (e.kind === "add") return ev(e.left) + ev(e.right);
+  return -ev(e.of);
+}
+function main() {
+  const one: Expr = { kind: "num", n: 1 };
+  const two: Expr = { kind: "num", n: 2 };
+  const sum: Expr = { kind: "add", left: one, right: two };
+  console.log(ev({ kind: "neg", of: sum }));
+  const e: Expr = { kind: "add", left: { kind: "num", n: 4 }, right: { kind: "add", left: { kind: "num", n: 5 }, right: { kind: "num", n: 6 } } };
+  console.log(ev(e));
+}
+// case: recursive_arrays
+// expect: 5 a b c d e
+// expect: b 1 3
+// expect: b B 2
+type Tree = { name: string; children: Tree[] };
+function count(t: Ref<Tree>): i64 {
+  let n = 1;
+  for (const c of t.children) n += count(c);
+  return n;
+}
+function names(t: Ref<Tree>): string {
+  let out = t.name;
+  for (const c of t.children) out = out + " " + names(c);
+  return out;
+}
+function main() {
+  const leaf: Tree = { name: "c", children: [] };
+  let t: Tree = { name: "a", children: [{ name: "b", children: [leaf] }, { name: "d", children: [] }] };
+  t.children.push({ name: "e", children: [] });
+  console.log(count(t), names(t));
+  console.log(t.children[0].name, t.children[0].children.length, t.children.length);
+  const copy = t.children[0].clone();
+  t.children[0].name = "B";
+  console.log(copy.name, t.children[0].name, count(copy));
+}
+// case: recursive_generic
+// expect: 3 x
+// expect: 2
+type List<T> = { head: T; tail: List<T> | null };
+type Pair<T> = { a: T; b: T };
+function length<T>(l: List<T>): i64 {
+  const tail = l.tail;
+  if (tail === null) return 1;
+  return 1 + length(tail);
+}
+function second<T>(p: Pair<T>): T {
+  return p.b;
+}
+function main() {
+  const l: List<string> = { head: "x", tail: { head: "y", tail: { head: "z", tail: null } } };
+  const head = l.head;
+  console.log(length(l), head);
+  console.log(second({ a: 1, b: 2 }));
+}
+// case: recursive_mutual
+// expect: 1 2 3
+type A = { n: i64; b: B | null };
+type B = { m: i64; a: A | null };
+function main() {
+  const a: A = { n: 1, b: { m: 2, a: { n: 3, b: null } } };
+  const b = a.b;
+  if (b !== null) {
+    const inner = b.a;
+    if (inner !== null) console.log(a.n, b.m, inner.n);
+  }
+}
+// case: recursive_class
+// expect: 6
+// expect: 11
+// expect: 2 3
+// expect: y 2
+class Node {
+  value: i64;
+  next: Node | null;
+  constructor(value: i64, next: Node | null) {
+    this.value = value;
+    this.next = next;
+  }
+  sum(): i64 {
+    const next = this.next.clone();
+    if (next === null) return this.value;
+    return this.value + next.sum();
+  }
+  replaceNext(this: Mut<this>, v: i64) {
+    this.next = new Node(v, null);
+  }
+}
+class A { n: i64; b: B | null; constructor(n: i64, b: B | null) { this.n = n; this.b = b; } }
+class B { m: i64; a: A | null; constructor(m: i64, a: A | null) { this.m = m; this.a = a; } }
+class Chain<T> {
+  head: T;
+  tail: Chain<T> | null;
+  constructor(head: T, tail: Chain<T> | null) {
+    this.head = head;
+    this.tail = tail;
+  }
+  size(): i64 {
+    const tail = this.tail.clone();
+    return tail === null ? 1 : 1 + tail.size();
+  }
+}
+function main() {
+  let list = new Node(1, new Node(2, new Node(3, null)));
+  console.log(list.sum());
+  list.replaceNext(10);
+  console.log(list.sum());
+  const a = new A(1, new B(2, new A(3, null)));
+  const b = a.b;
+  if (b !== null) {
+    const inner = b.a;
+    if (inner !== null) console.log(b.m, inner.n);
+  }
+  const cells = new Chain<string>("x", new Chain<string>("y", null));
+  const size = cells.size();
+  const tail = cells.tail;
+  if (tail !== null) console.log(tail.head, size);
+}
+// case: recursive_enum
+// expect: -4
+// expect: 10 3
+// expect: 7
+enum Expr { Num(i64), Add(Expr, Expr), Neg(Expr) }
+function ev(e: Ref<Expr>): i64 {
+  return match (e) {
+    case Expr.Num(n) => n,
+    case Expr.Add(a, b) => ev(a) + ev(b),
+    case Expr.Neg(x) => -ev(x),
+  };
+}
+function make(n: i64): Expr {
+  return n === 0 ? Expr.Num(0) : Expr.Add(Expr.Num(n), make(n - 1));
+}
+function total(e: Expr): i64 {
+  return match (e) {
+    case Expr.Num(n) => n,
+    case Expr.Add(a, b) => total(a.clone()) + total(b.clone()),
+    case Expr.Neg(x) => -total(x.clone()),
+  };
+}
+function left(n: i64): i64 {
+  return match (make(n)) {
+    case Expr.Num(v) => v,
+    case Expr.Add(a, _) => total(a),
+    case Expr.Neg(x) => total(x),
+  };
+}
+function main() {
+  console.log(ev(Expr.Add(Expr.Num(1), Expr.Neg(Expr.Add(Expr.Num(2), Expr.Num(3))))));
+  console.log(total(make(4)), left(3));
+  let e = make(2);
+  e = Expr.Num(7);
+  console.log(total(e));
+}
+// case: recursive_comptime
+// expect: 6 10 18
+// expect: 6
+// expect: 10
+// expect: 18
+type Node = { value: i64; next: Node | null };
+type Tree = { v: i64; kids: Tree[] };
+enum Expr { Num(i64), Add(Expr, Expr) }
+function sum(n: Node): i64 {
+  const next = n.next;
+  if (next === null) return n.value;
+  return n.value + sum(next);
+}
+function weight(t: Ref<Tree>): i64 {
+  let w = t.v;
+  for (const k of t.kids) w += weight(k);
+  return w;
+}
+function ev(e: Ref<Expr>): i64 {
+  return match (e) {
+    case Expr.Num(n) => n,
+    case Expr.Add(a, b) => ev(a) + ev(b),
+  };
+}
+const TOTAL = comptime sum({ value: 1, next: { value: 2, next: { value: 3, next: null } } });
+const WEIGHT = comptime weight({ v: 1, kids: [{ v: 2, kids: [] }, { v: 3, kids: [{ v: 4, kids: [] }] }] });
+const VALUE = comptime ev(Expr.Add(Expr.Num(5), Expr.Add(Expr.Num(6), Expr.Num(7))));
+function main() {
+  console.log(TOTAL, WEIGHT, VALUE);
+  console.log(sum({ value: 1, next: { value: 2, next: { value: 3, next: null } } }));
+  console.log(weight({ v: 1, kids: [{ v: 2, kids: [] }, { v: 3, kids: [{ v: 4, kids: [] }] }] }));
+  console.log(ev(Expr.Add(Expr.Num(5), Expr.Add(Expr.Num(6), Expr.Num(7)))));
+}
+// case: recursive_types_mixed
+// expect: 9 1 5
+// expect: 2 2 9
+// expect: a 2
+// expect: 1
+type Tree = { v: i64; kids: Tree[] };
+type Json = { kind: "num"; n: i64 } | { kind: "arr"; items: Json[] };
+type List<T> = { head: T; tail: List<T> | null };
+enum Seq<T> { Nil, Cons(T, Seq<T>) }
+enum E { Leaf(i64), Wrap(Node) }
+class Node {
+  e: E;
+  constructor(e: E) { this.e = e; }
+  depth(): i64 {
+    return match (this.e) {
+      case E.Leaf(v) => v,
+      case E.Wrap(m) => 1 + m.depth(),
+    };
+  }
+}
+function sum(ts: Ref<Tree[]>): i64 {
+  let s = 0;
+  for (const t of ts) s += t.v + sum(t.kids);
+  return s;
+}
+function first(t: Ref<Tree>): Ref<Tree> {
+  return t.kids[0];
+}
+function len<T>(l: Ref<List<T>>): i64 {
+  return match (l) {
+    case { tail: null } => 1,
+    case { tail } => 1 + len<T>(tail!),
+  };
+}
+function size<T>(l: Seq<T>): i64 {
+  return match (l) {
+    case Seq.Nil => 0,
+    case Seq.Cons(_, rest) => 1 + size<T>(rest.clone()),
+  };
+}
+function count(j: Ref<Json>): i64 {
+  return match (j) {
+    case { kind: "num" } => 1,
+    case { kind: "arr", items } => items.map((x) => count(x)).reduce((a, b) => a + b, 0),
+  };
+}
+function main() {
+  let t: Tree = { v: 1, kids: [{ v: 2, kids: [] }] };
+  t.kids[0] = { v: 9, kids: [] };
+  const kids: Tree[] = [{ v: 2, kids: [{ v: 3, kids: [] }] }];
+  const u: Tree = { v: 1, kids };
+  console.log(t.kids[0].v, u.kids.length, sum(u.kids));
+  const l: List<string> = { head: "a", tail: { head: "b", tail: null } };
+  const s: Seq<string> = Seq.Cons("a", Seq.Cons("b", Seq.Nil));
+  console.log(len<string>(l), size<string>(s), new Node(E.Wrap(new Node(E.Wrap(new Node(E.Leaf(7)))))).depth());
+  console.log(first(u).kids[0].v === 3 ? "a" : "b", count({ kind: "arr", items: [{ kind: "num", n: 1 }, { kind: "arr", items: [{ kind: "num", n: 2 }] }] }));
+  const j: Json = { kind: "arr", items: [{ kind: "num", n: 1 }, { kind: "arr", items: [] }] };
+  console.log(count(j));
+}
+// case: recursive_array_methods
+// expect: 10 20 1 20 1
+type Tree = { v: i64; kids: Tree[] };
+function double(t: Ref<Tree>): Tree {
+  return { v: t.v * 2, kids: t.kids.map((k) => double(k)) };
+}
+function sum(t: Ref<Tree>): i64 {
+  return t.v + t.kids.map((k) => sum(k)).reduce((a, b) => a + b, 0);
+}
+function main() {
+  const t: Tree = { v: 1, kids: [{ v: 2, kids: [{ v: 3, kids: [] }] }, { v: 4, kids: [] }] };
+  const d = double(t);
+  let m = new Map<string, Tree>();
+  m.set("a", d.clone());
+  const vs = [...m.values()];
+  const direct = m.values();
+  console.log(sum(t), sum(d), vs.length, sum(vs[0]), direct.length);
+}
+// case: recursive_through_arrays
+// expect: 2 3
+// expect: 1
+// expect: 5 6
+// expect: 1 -1
+// expect: 1 true 2 false
+// expect: changed
+// expect: 2 0 3 1
+type Tree = { v: i64; kids: Tree[] };
+type Named = { v: string; kids: Named[] };
+type Json = { kind: "num"; n: i64 } | { kind: "arr"; items: Json[] };
+type Node = { v: i64; next: Node | null };
+enum Expr { Num(i64), Neg(Expr) }
+class Holder {
+  items: Link[];
+  constructor() { this.items = []; }
+}
+class Link {
+  v: i64;
+  next: Link | null;
+  constructor(v: i64, next: Link | null) { this.v = v; this.next = next; }
+}
+function two<T>(a: T, b: T): T[] {
+  let out: T[] = [];
+  out.push(a);
+  out.push(b);
+  return out;
+}
+function pick(t: Mut<Named>): Mut<Named> {
+  return t.kids[0];
+}
+function main() {
+  const ys = two<Tree>({ v: 1, kids: [] }, { v: 2, kids: [{ v: 3, kids: [] }] });
+  console.log(ys[1].v, ys[1].kids[0].v);
+  let h = new Holder();
+  h.items.push(new Link(1, null));
+  console.log(h.items[0].v);
+  const items: Json[] = [{ kind: "num", n: 5 }, { kind: "num", n: 6 }];
+  const ns = items.map((x) => (x.kind === "num" ? x.n : 0));
+  console.log(ns[0], ns[1]);
+  const es: Expr[] = [Expr.Num(1), Expr.Neg(Expr.Num(2))];
+  const vs = es.map((x) => match (x) {
+    case Expr.Num(n) => n,
+    case Expr.Neg(_) => -1,
+  });
+  console.log(vs[0], vs[1]);
+  const nodes: Node[] = [{ v: 1, next: null }, { v: 2, next: { v: 3, next: null } }];
+  let shown = "";
+  for (const n of nodes) {
+    const { v } = n;
+    shown = shown + (shown === "" ? "" : " ") + `${v} ${n.next === null}`;
+  }
+  console.log(shown);
+  let named: Named = { v: "r", kids: [{ v: "a", kids: [] }] };
+  const p = pick(named);
+  p.v = "changed";
+  console.log(named.kids[0].v);
+  const t: Tree = { v: 1, kids: [{ v: 2, kids: [] }, { v: 3, kids: [{ v: 4, kids: [] }] }] };
+  let line = "";
+  for (const k of t.kids.values()) line = line + (line === "" ? "" : " ") + `${k.v} ${k.kids.length}`;
+  console.log(line);
+}
+// case: recursive_type_functions
+// expect: 2 2
+// expect: yes 0 1
+// expect: 1
+type T = T[];
+type Tree = { v: i64; kids: Tree[] };
+type Json = { kind: "num"; n: i64 } | { kind: "arr"; items: Json[] };
+type IsTree<X> = X extends { v: i64 } ? "yes" : "no";
+type Arr = Exclude<Json, { kind: "num"; n: i64 }>;
+function mk(): Tree {
+  return { v: 1, kids: [] };
+}
+function depth(t: Ref<T>): i64 {
+  let d = 0;
+  for (const c of t) {
+    const x = depth(c) + 1;
+    if (x > d) d = x;
+  }
+  return d;
+}
+async function main() {
+  const x: T = [[], [[]]];
+  console.log(depth(x), x.length);
+  const y: IsTree<Tree> = "yes";
+  const a: Arr = { kind: "arr", items: [] };
+  const r: ReturnType<typeof mk> = mk();
+  console.log(y, a.items.length, r.v);
+  const t: Tree = { v: 1, kids: [{ v: 2, kids: [] }] };
+  const h = spawn(async () => t.kids.length);
+  const n = await h;
+  console.log(n);
+}
+// case: recursive_comptime_constant
+// error: 'Tree' can't be computed while compiling
+type Tree = { v: i64; kids: Tree[] };
+function mk(n: i64): Tree {
+  let t: Tree = { v: n, kids: [] };
+  if (n > 0) t.kids.push(mk(n - 1));
+  return t;
+}
+const T = comptime mk(3);
+function main() {
+  console.log(T.v);
+}
+// case: recursive_optional_members
+// expect: 2 0 none
+// expect: ok 1
+type Stmt = { kind: "fn"; name: string; body: Stmt[]; note?: string } | { kind: "ret"; value: i64 };
+type U = { kind: "a"; n: i64 } | { kind: "opt"; o: i64[] | null };
+type T = { kids: T[] | null; v: i64 };
+function size(s: Stmt): i64 {
+  if (s.kind === "fn") {
+    const body = s.body;
+    return body.length as i64;
+  }
+  return 0;
+}
+function note(s: Stmt): string {
+  if (s.kind === "fn") {
+    const n = s.note;
+    return n ?? "none";
+  }
+  return "-";
+}
+function main() {
+  const f: Stmt = { kind: "fn", name: "f", body: [{ kind: "ret", value: 1 }, { kind: "ret", value: 2 }] };
+  console.log(size(f), size({ kind: "ret", value: 3 }), note({ kind: "fn", name: "g", body: [] }));
+  const u: U = { kind: "opt", o: [] };
+  const t: T = { kids: [{ kids: null, v: 2 }], v: 1 };
+  console.log(u.kind === "opt" ? "ok" : "no", t.v);
+}
+// case: recursive_union_generic
+// expect: leaf node
+type Tree = { kind: "leaf"; v: i64 } | { kind: "node"; kids: Tree[] };
+function id<T>(x: T): T {
+  return x;
+}
+function main() {
+  const t: Tree = { kind: "leaf", v: 1 };
+  const n: Tree = { kind: "node", kids: [{ kind: "leaf", v: 2 }] };
+  console.log(id(t).kind, id(n).kind);
+}
+// case: recursive_array_of_optional_fields
+// An array built in a variable goes into a recursive union's member intact, its elements holding fields written `T | undefined`.
+type Span = { start: usize; end: usize }
+type Id = { id: usize }
+type Stmt = Span & Id & (
+  | { kind: "let"; decls: Declarator[] }
+  | { kind: "expr"; expr: Expr }
+) | Func
+type Expr = Span & Id & ({ kind: "num"; v: i64 } | { kind: "fn"; body: Stmt[] })
+type Func = Span & Id & { kind: "function"; name: string; body: Stmt[] | undefined }
+type Declarator = Span & Id & { target: string; type: string | undefined; init: Expr | undefined }
+function declarator(n: usize): Declarator {
+  return { id: n, target: "a", type: undefined, init: undefined, start: n, end: n }
+}
+function make(): Stmt {
+  let decls: Declarator[] = []
+  decls.push(declarator(1))
+  decls.push(declarator(2))
+  const start: usize = 0
+  return { id: 0, kind: "let", decls, start, end: start }
+}
+function main(): void {
+  const s = make()
+  if (s.kind === "let") console.log(s.decls.length, s.decls[1]!.start)
+}
+// expect: 2 2
+// case: recursive_named_members
+// A union of named members that refer back to it reads their shared fields, a field typed differently per member as the union of them.
+// expect: call
+// expect: 14
+// expect: member
+// expect: ident
+// expect: 2
+// expect: s
+// expect: 4
+// expect: if
+// expect: if(call) { expr } else member
+type Ident = { kind: "ident"; name: string; start: i64 };
+type Member = { kind: "member"; object: Expr; prop: string; start: i64 };
+type Call = { kind: "call"; callee: Expr; args: Expr[]; start: i64 };
+type Num = { kind: "num"; value: i64; start: string };
+type Expr = Ident | Member | Call | Num;
+type ExprStmt = { kind: "expr"; expr: Expr };
+type If = { kind: "if"; cond: Expr; then: Stmt; else?: Stmt };
+type Block = { kind: "block"; body: Stmt[] };
+type Stmt = ExprStmt | If | Block;
+
+function count(e: Expr): i64 {
+  if (e.kind === "member") return 1 + count(e.object);
+  if (e.kind === "call") {
+    let n = 1 + count(e.callee);
+    for (const a of e.args) n += a.kind === "num" ? 10 : 1;
+    return n;
+  }
+  return 1;
+}
+
+function kinds(s: Stmt): string {
+  if (s.kind === "if") {
+    const e = s.else;
+    const tail = e === undefined ? "" : " else " + kinds(e);
+    return "if(" + s.cond.kind + ") " + kinds(s.then) + tail;
+  }
+  if (s.kind === "block") {
+    let out = "{";
+    for (const t of s.body) out += " " + t.kind;
+    return out + " }";
+  }
+  return s.expr.kind;
+}
+
+function main() {
+  const x: Expr = { kind: "ident", name: "x", start: 0 };
+  const m: Expr = { kind: "member", object: x.clone(), prop: "y", start: 1 };
+  const c: Expr = { kind: "call", callee: m.clone(), args: [{ kind: "num", value: 3, start: "s" }, { kind: "ident", name: "z", start: 4 }], start: 2 };
+  console.log(c.kind);
+  console.log(count(c.clone()));
+  if (c.kind === "call") console.log(c.callee.kind);
+  if (c.kind === "call") { const f = c.callee.clone(); if (f.kind === "member") console.log(f.object.kind); }
+  const st = c.start;
+  console.log(st);
+  if (c.kind === "call") for (const a of c.args) console.log(a.start);
+  const s: Stmt = { kind: "if", cond: c.clone(), then: { kind: "block", body: [{ kind: "expr", expr: x.clone() }] }, else: { kind: "expr", expr: m.clone() } };
+  console.log(s.kind);
+  console.log(kinds(s));
+}
+// case: recursive_named_members_nested
+// expect: add
+// expect: neg
+// expect: -3
+type Lit = { kind: "lit"; v: i64 };
+type Add = { kind: "add"; l: Expr; r: Expr };
+type Neg = { kind: "neg"; of: Expr };
+type Compound = Add | Neg;
+type Expr = Lit | Compound;
+function ev(e: Expr): i64 {
+  if (e.kind === "lit") return e.v;
+  if (e.kind === "add") return ev(e.l) + ev(e.r);
+  if (e.kind === "neg") return -ev(e.of);
+  return 0;
+}
+function main() {
+  const e: Expr = { kind: "add", l: { kind: "lit", v: 2 }, r: { kind: "neg", of: { kind: "lit", v: 5 } } };
+  console.log(e.kind);
+  const n: Expr = { kind: "neg", of: { kind: "lit", v: 1 } };
+  console.log(n.kind);
+  console.log(ev(e));
+}
+// case: recursive_named_member_write_through_mut
+// A field written through a Mut narrowed to a member that holds the union again lands in its block.
+// expect: in 102
+// expect: 102
+// expect: 102
+type Lit = { kind: "lit"; v: i64 };
+type Add = { kind: "add"; l: Expr; v: i64 };
+type Expr = Lit | Add;
+function bump(e: Mut<Expr>) { if (e.kind === "add") { e.v = e.v + 100; console.log("in", e.v); } }
+function main() { let e: Expr = { kind: "add", l: { kind: "lit", v: 1 }, v: 2 }; bump(e); if (e.kind === "add") console.log(e.v); console.log(e.v); }
+// case: recursive_option_write_through_mut
+// expect: in 101
+// expect: 101
+type Cons = { v: i64; next: L };
+type L = Cons | null;
+function bump(l: Mut<L>) { if (l !== null) { l.v = l.v + 100; console.log("in", l.v); } }
+function main() { let l: L = { v: 1, next: { v: 2, next: null } }; bump(l); if (l !== null) console.log(l.v); }
+// case: recursive_named_member_lend_field
+// A field of such a member is lent where it lives, and assigned whole.
+// expect: 13 7
+type Lit = { kind: "lit"; v: i64 };
+type Add = { kind: "add"; l: Expr; v: i64 };
+type Expr = Lit | Add;
+function inc(n: Mut<i64>) { n = n + 1; }
+function bump(e: Mut<Expr>) {
+  if (e.kind === "add") { e.v += 10; inc(e.v); e.l = { kind: "lit", v: 7 }; }
+}
+function main() {
+  let e: Expr = { kind: "add", l: { kind: "lit", v: 1 }, v: 2 };
+  bump(e);
+  if (e.kind === "add") { const l = e.l; console.log(e.v, l.v); }
+}
+// case: recursive_named_member_match
+// expect: 6
+// expect: add of lit 2
+// expect: lit 9
+// expect: add
+// expect: 11
+type Lit = { kind: "lit"; v: i64 };
+type Add = { kind: "add"; l: Expr; r: Expr };
+type Expr = Lit | Add;
+function ev(e: Expr): i64 {
+  return match (e) {
+    case { kind: "lit", v } => v,
+    case { kind: "add", l, r } => ev(l.clone()) + ev(r.clone()),
+  };
+}
+function main() { const e: Expr = { kind: "add", l: { kind: "lit", v: 2 }, r: { kind: "lit", v: 4 } }; console.log(ev(e.clone())); console.log(show(e.clone())); console.log(show({ kind: "lit", v: 9 })); console.log(show({ kind: "add", l: e, r: { kind: "lit", v: 1 } })); console.log(owned()); }
+function show(e: Expr): string {
+  return match (e) {
+    case { kind: "add", l: { kind: "lit", v } } => `add of lit ${v}`,
+    case { kind: "add" } => "add",
+    case { v } => `lit ${v}`,
+  };
+}
+function owned(): i64 {
+  const e: Expr = { kind: "add", l: { kind: "lit", v: 5 }, r: { kind: "lit", v: 6 } };
+  return match (e) {
+    case { kind: "add", l, r } => ev(l.clone()) + ev(r.clone()),
+    case { kind: "lit", v } => v,
+  };
+}
+// case: recursive_named_member_match_uncovered
+// error: this match doesn't cover { kind: "add", l: { kind: "add" } }
+type Lit = { kind: "lit"; v: i64 };
+type Add = { kind: "add"; l: Expr; r: Expr };
+type Expr = Lit | Add;
+function f(e: Expr): i64 {
+  return match (e) {
+    case { kind: "add", l: { kind: "lit" } } => 1,
+    case { kind: "lit" } => 2,
+  };
+}
+function main() { console.log(f({ kind: "lit", v: 1 })); }
+// case: recursive_named_member_field_path_narrowing
+// A field path narrows through a member holding the union again, for reads and writes.
+// expect: 14 52
+// expect: 3 3
+type Lit = { kind: "lit"; v: i64 };
+type Add = { kind: "add"; l: Expr; v: i64 };
+type Expr = Lit | Add;
+function main1() {
+  let e: Expr = { kind: "add", l: { kind: "add", l: { kind: "lit", v: 1 }, v: 2 }, v: 3 };
+  if (e.kind === "add") { if (e.l.kind === "add") { e.l.v = 50; e.l.v += 1; e.l.v++; } }
+  if (e.kind === "add") { e.v++; e.v += 10; }
+  if (e.kind === "add") { const a = e.l; console.log(e.v, a.v); }
+}
+function rd(e: Ref<Expr>): i64 { if (e.kind === "add") { if (e.l.kind === "add") return e.l.v + e.l.l.v; return e.l.v; } return e.v; }
+function ow(e: Expr): i64 { if (e.kind === "add") { if (e.l.kind === "add") return e.l.v + e.l.l.v; return e.l.v; } return e.v; }
+function main2() { const e: Expr = { kind: "add", l: { kind: "add", l: { kind: "lit", v: 1 }, v: 2 }, v: 3 }; console.log(rd(e), ow(e)); }
+function main() { main1(); main2(); }
+
+// case: recursive_holding_a_brand
+// expect: 3
+// expect: 0
+type Id = Brand<usize, "id">;
+type Kin = Brand<usize, "kin">;
+type Leaf = { kind: "leaf"; id: Id | Kin; tag?: usize };
+type Node = { kind: "node"; kids: Tree[]; tag?: usize };
+type Tree = string | null | Leaf | Node;
+function copy(t: Tree): Tree {
+  if (t === null || typeof t !== "object") return t;
+  switch (t.kind) {
+    case "leaf":
+      return { kind: "leaf", id: t.id, tag: t.tag };
+    case "node":
+      return { kind: "node", kids: [] };
+  }
+  return null;
+}
+function main() {
+  const leaf = copy({ kind: "leaf", id: 4 as Id, tag: 3 as usize });
+  if (leaf !== null && typeof leaf !== "string" && leaf.kind === "leaf") console.log(leaf.tag ?? 0);
+  const node = copy({ kind: "node", kids: ["a"] });
+  if (node !== null && typeof node !== "string" && node.kind === "node") console.log(node.kids.length);
+}
+
+// case: recursive_through_its_array_holding_a_brand
+// expect: 2 7
+// expect: 1
+type Val = string | null | Spot | List;
+type Mark = Brand<usize, "mark">;
+type Spot = { kind: "spot"; mark: Mark; note?: usize };
+type List = { kind: "list"; items: Val[]; note?: usize };
+function dup(v: Val): Val {
+  if (v === null || typeof v !== "object") return v;
+  switch (v.kind) {
+    case "spot":
+      return { kind: "spot", mark: v.mark, note: v.note };
+    case "list": {
+      let items: Val[] = [];
+      for (const x of v.items) items.push(dup(x.clone()));
+      return { kind: "list", items, note: v.note };
+    }
+  }
+  return null;
+}
+function main() {
+  const c = dup({ kind: "spot", mark: 7 as Mark, note: 2 as usize });
+  if (c !== null && typeof c !== "string" && c.kind === "spot") console.log(c.note ?? 0, c.mark);
+  const l = dup({ kind: "list", items: ["a"] });
+  if (l !== null && typeof l !== "string" && l.kind === "list") console.log(l.items.length);
+}
+
+// case: recursive_member_holding_a_narrowed_self
+// expect: option
+type TypeId = Brand<usize, "TypeId">;
+type Type = string | TypeId;
+type C =
+  | { kind: "plain"; type: Type }
+  | { kind: "string" }
+  | { kind: "option"; of: C; inner: Type }
+  | { kind: "array"; element: C; elementType: Type; lent: boolean };
+
+function f(t: Type, n: i64): C | string {
+  if (n > 0) {
+    const e = f(t, n - 1);
+    if (typeof e === "string") return e;
+    if (e.kind === "array") return { kind: "option", of: e, inner: t };
+    return { kind: "array", element: e, elementType: t, lent: false };
+  }
+  return { kind: "plain", type: t };
+}
+
+function main() {
+  const r = f("x", 2);
+  if (typeof r !== "string") console.log(r.kind);
+}
+
+// case: recursive_string_member_read_through_a_reference_is_retained
+// expect: true
+// expect: true
+// expect: true
+// expect: true
+// expect: heapheapheap
+type Expr = { kind: "id"; name: string } | { kind: "list"; items: Expr[] } | { kind: "prop"; key: Name };
+type Name = string | Expr;
+function cloneExpr(n: Ref<Expr>): Expr {
+  if (n.kind === "id") return { kind: "id" as const, name: n.name };
+  if (n.kind === "list") return { kind: "list" as const, items: n.items.map((x) => cloneExpr(x)) };
+  return { kind: "prop" as const, key: cloneName(n.key) };
+}
+function cloneName(n: Ref<Name>): Name {
+  if (typeof n === "string") return n;
+  return cloneExpr(n) as Name;
+}
+type M = { name: Name };
+function main() {
+  const text = "heap".repeat(3);
+  const m: M = { name: text };
+  for (let i = 0; i < 4; i++) {
+    const c: M = { name: cloneName(m.name) };
+    console.log(typeof c.name === "string");
+  }
+  console.log(text);
+}
+
+// case: recursive_array_of_a_brand_as_a_member
+// expect: 2
+// expect: 1
+type Id = Brand<usize, "id">;
+type V = Id[] | { kind: "n"; v: V[] };
+function size(v: Ref<V>): usize { return Array.isArray(v) ? v.length : v.v.length; }
+function main() {
+  const a: V = [1 as Id, 2 as Id];
+  console.log(size(a));
+  const b: V = { kind: "n", v: [a] };
+  console.log(size(b));
+}
+
+// case: recursive_map_of_a_brand_as_a_member
+// expect: 1
+type Id = Brand<usize, "id">;
+type V = Map<string, Id> | { kind: "n"; v: V[] };
+function main() {
+  let m = new Map<string, Id>();
+  m.set("a", 1 as Id);
+  const a: V = m;
+  const b: V = { kind: "n", v: [a] };
+  console.log(typeof b === "object" && !(b instanceof Map) ? b.v.length : 0);
+}
+
+// case: recursive_two_brands_of_one_base
+// expect: n
+type Id = Brand<usize, "id">;
+type Kin = Brand<usize, "kin">;
+type V = Id | Kin | string | V[];
+function show(v: Ref<V>): string {
+  if (typeof v === "string") return "s";
+  if (Array.isArray(v)) return "a";
+  return "n";
+}
+function main() {
+  const x: V = 2 as Kin;
+  console.log(show(x));
+}
+
+// case: recursive_extract_by_a_field_not_named_kind
+// expect: 5
+type Blk = { tag: "blk"; n: i64 };
+type Oth = { tag: "oth"; b: Extract<S, { tag: "blk" }> | null; kids: S[] };
+type S = Blk | Oth;
+function f(s: Ref<S>): i64 { return s.tag === "oth" && s.b !== null ? s.b.n : 0; }
+function main() {
+  const a: S = { tag: "oth", b: { tag: "blk", n: 5 }, kids: [] };
+  console.log(f(a));
+}
+// case: recursive_moved_into_a_map_entry
+// expect: 2
+// A recursive value moved into a map's entry keeps the blocks it owns.
+type Rec = { kind: "record"; fields: Map<string, Val> };
+type Table = { kind: "map"; entries: Map<string, [Val, Val]> };
+type Val = string | Rec | Table;
+function main() {
+  let fields = new Map<string, Val>();
+  fields.set("name", "plus");
+  const op: Val = { kind: "record", fields };
+  let made: Table = { kind: "map", entries: new Map() };
+  made.entries.set("add", ["add", op]);
+  made.entries.set("neg", ["neg", "minus"]);
+  console.log(made.entries.size);
+}

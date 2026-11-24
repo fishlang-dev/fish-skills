@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "fish-skills",
+  "description": "Agent skills for Fish Lang.",
+  "owner": {
+    "name": "The Fish Lang contributors",
+    "url": "https://github.com/fishlang-dev"
+  },
+  "plugins": [
+    {
+      "name": "fish",
+      "description": "Deep knowledge of Fish Lang (.fsh), checked against the fishc compiler.",
+      "source": "./",
+      "category": "development"
+    }
+  ]
+}
